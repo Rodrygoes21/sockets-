@@ -67,7 +67,10 @@ foreach ($ticket in $tickets) {
     $num = $count + 1
     Write-Host "  - [$num/10] $($ticket.Title.Substring(0, [Math]::Min(40, $ticket.Title.Length)))..." -NoNewline
     
-    $null = & $GH_EXE issue create --repo $REPO --title $ticket.Title --body $ticket.Description --label $ticket.Labels 2>&1
+    # Convertir \n a saltos de línea reales
+    $bodyFormatted = $ticket.Description -replace '\\n', "`n"
+    
+    $null = & $GH_EXE issue create --repo $REPO --title $ticket.Title --body $bodyFormatted --label $ticket.Labels 2>&1
         
     if ($LASTEXITCODE -eq 0) {
         Write-Host " [OK]" -ForegroundColor Green
