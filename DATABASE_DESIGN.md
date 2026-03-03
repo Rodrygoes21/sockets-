@@ -1,936 +1,1086 @@
-# DISEÑO DE BASE DE DATOS - STORAGE CLUSTER
+# DISEÑO DE BASE DE DATOS - MONGODB
 
-## ESQUEMA COMPLETO Y DICCIONARIO DE DATOS
+## STORAGE CLUSTER CON NODO CENTRAL DE MONITOREO
 
----
-
-## 1. DIAGRAMA ENTIDAD-RELACIÓN (ER)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ESQUEMA DE BASE DE DATOS                     │
-└─────────────────────────────────────────────────────────────────┘
-
-┌──────────────────┐           ┌──────────────────┐
-│     clients      │           │     metrics      │
-├──────────────────┤           ├──────────────────┤
-│ client_id    PK  │◄──────────┤ id           PK  │
-│ ip_address       │         │ │ client_id    FK  │
-│ port             │         │ │ total_capacity   │
-│ status           │         │ │ used_capacity    │
-│ first_connected  │         │ │ free_capacity    │
-│ last_seen_at     │         │ │ utilization_%    │
-│ total_uptime     │         │ │ growth_rate      │
-│ total_downtime   │         │ │ recorded_at      │
-│ created_at       │         │ │ created_at       │
-│ updated_at       │         │ └──────────────────┘
-└──────────────────┘         │
-        │                    │
-        │                    │
-        │ 1:N                │ 1:N
-        │                    │
-        ▼                    ▼
-┌──────────────────┐   ┌──────────────────┐
-│ sent_messages    │   │availability_     │
-├──────────────────┤   │    events        │
-│ message_id   PK  │   ├──────────────────┤
-│ client_id    FK  │   │ id           PK  │
-│ message_type     │   │ client_id    FK  │
-│ content          │   │ event_type       │
-│ status           │   │ event_timestamp  │
-│ sent_at          │   │ duration_seconds │
-│ ack_received_at  │   │ created_at       │
-│ response_time_ms │   └──────────────────┘
-│ created_at       │
-└──────────────────┘
-
-┌──────────────────┐
-│ global_metrics   │
-├──────────────────┤
-│ id           PK  │
-│ total_capacity   │
-│ used_capacity    │
-│ free_capacity    │
-│ utilization_%    │
-│ growth_rate      │
-│ clients_up       │
-│ clients_down     │
-│ calculated_at    │
-│ created_at       │
-└──────────────────┘
-```
+**Base de Datos:** MongoDB 6.0+  
+**Driver:** mongodb para Node.js  
+**Fecha:** Marzo 2, 2026
 
 ---
 
-## 2. DEFINICIÓN DE TABLAS
+## 1. VISIÓN GENERAL
 
-### 2.1 Tabla: `clients`
+### 1.1 Base de Datos
 
-**Descripción:** Almacena información de los 9 nodos clientes (servidores regionales).
+```javascript
+// Nombre de la base de datos
+const DATABASE_NAME = "storage_cluster";
 
-**Script SQL:**
-```sql
-CREATE TABLE clients (
-    client_id VARCHAR(20) PRIMARY KEY,
-    ip_address VARCHAR(15) NOT NULL,
-    port INTEGER NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'DISCONNECTED',
-    first_connected_at TIMESTAMP NOT NULL,
-    last_seen_at TIMESTAMP NOT NULL,
-    total_uptime_seconds INTEGER DEFAULT 0,
-    total_downtime_seconds INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_status CHECK (status IN ('UP', 'DOWN', 'DISCONNECTED', 'CONNECTED')),
-    CONSTRAINT chk_client_id CHECK (client_id GLOB 'CLIENT_[0-9][0-9][0-9]')
-);
-
-CREATE INDEX idx_clients_status ON clients(status);
-CREATE INDEX idx_clients_last_seen ON clients(last_seen_at);
+// Colecciones principales
+const COLLECTIONS = {
+  clients: "clients",
+  metrics: "metrics",
+  globalMetrics: "globalMetrics",
+  sentMessages: "sentMessages",
+  availabilityEvents: "availabilityEvents"
+};
 ```
 
-**Diccionario de Campos:**
+### 1.2 Ventajas de MongoDB para Este Proyecto
 
-| Campo | Tipo | Descripción | Restricciones |
-|-------|------|-------------|---------------|
-| `client_id` | VARCHAR(20) | Identificador único del cliente (CLIENT_001 a CLIENT_009) | PRIMARY KEY, Formato: CLIENT_XXX |
-| `ip_address` | VARCHAR(15) | Dirección IPv4 del cliente | NOT NULL, VARCHAR(15) para "255.255.255.255" |
-| `port` | INTEGER | Puerto del socket del cliente | NOT NULL, Rango típico: 49152-65535 |
-| `status` | VARCHAR(20) | Estado actual del cliente | NOT NULL, Valores: UP, DOWN, DISCONNECTED, CONNECTED |
-| `first_connected_at` | TIMESTAMP | Timestamp de la primera conexión exitosa | NOT NULL |
-| `last_seen_at` | TIMESTAMP | Timestamp de la última métrica recibida | NOT NULL, Actualizado con cada METRICS_REPORT |
-| `total_uptime_seconds` | INTEGER | Tiempo acumulado en estado UP (segundos) | DEFAULT 0, Para cálculo de availability |
-| `total_downtime_seconds` | INTEGER | Tiempo acumulado en estado DOWN (segundos) | DEFAULT 0, Para cálculo de availability |
-| `created_at` | TIMESTAMP | Timestamp de creación del registro | DEFAULT CURRENT_TIMESTAMP |
-| `updated_at` | TIMESTAMP | Timestamp de última actualización | DEFAULT CURRENT_TIMESTAMP |
+| Característica | Beneficio |
+|----------------|-----------|
+| **Schema flexible** | Permite evolución de métricas sin migraciones complejas |
+| **JSON nativo** | Los mensajes TCP ya están en JSON, almacenamiento directo |
+| **Aggregation Pipeline** | Cálculos de métricas globales eficientes |
+| **Escalabilidad horizontal** | Preparado para crecer de 9 a más clientes |
+| **Indexación eficiente** | Búsquedas optimizadas por cliente y timestamp |
 
-**Estados del Cliente:**
-- `CONNECTED`: Cliente conectado pero no ha enviado métricas
-- `UP`: Cliente activo enviando métricas periódicamente
-- `DOWN`: Cliente no reporta (timeout excedido)
-- `DISCONNECTED`: Conexión cerrada
+---
 
-**Ejemplo de Registro:**
-```sql
-INSERT INTO clients (
-    client_id, ip_address, port, status, 
-    first_connected_at, last_seen_at
-) VALUES (
-    'CLIENT_001', '192.168.1.10', 54321, 'UP',
-    '2026-03-02 14:30:00', '2026-03-02 14:35:00'
-);
+## 2. SCHEMAS DE COLECCIONES
+
+### 2.1 Colección: `clients`
+
+**Descripción:** Información de los 9 nodos clientes conectados
+
+**Schema:**
+```javascript
+{
+  _id: ObjectId("..."),
+  client_id: "CLIENT_001",              // String, único, requerido
+  client_name: "Servidor Regional Norte", // String
+  ip_address: "192.168.1.10",           // String
+  hostname: "SERVER-REGIONAL-01",       // String
+  status: "UP",                         // Enum: ['UP', 'DOWN', 'DISCONNECTED']
+  connected_at: ISODate("2026-03-02T10:00:00Z"), // Date
+  last_seen_at: ISODate("2026-03-02T14:30:45Z"), // Date
+  uptime_seconds: 15845,                // Number (int)
+  downtime_seconds: 120,                // Number (int)
+  last_metric: {                        // Subdocumento (última métrica)
+    total_capacity: 1099511627776,
+    used_capacity: 659706977280,
+    free_capacity: 439804650496,
+    utilization_percent: 60.0,
+    recorded_at: ISODate("2026-03-02T14:30:45Z")
+  },
+  created_at: ISODate("2026-03-02T10:00:00Z"),
+  updated_at: ISODate("2026-03-02T14:30:45Z")
+}
+```
+
+**Índices:**
+```javascript
+db.clients.createIndex({ "client_id": 1 }, { unique: true });
+db.clients.createIndex({ "status": 1 });
+db.clients.createIndex({ "last_seen_at": -1 });
+```
+
+**Validación de Schema:**
+```javascript
+db.createCollection("clients", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["client_id", "status", "ip_address"],
+      properties: {
+        client_id: {
+          bsonType: "string",
+          pattern: "^CLIENT_[0-9]{3}$",
+          description: "ID del cliente: CLIENT_001 a CLIENT_009"
+        },
+        status: {
+          enum: ["UP", "DOWN", "DISCONNECTED"],
+          description: "Estado del cliente"
+        },
+        ip_address: {
+          bsonType: "string",
+          description: "Dirección IP del cliente"
+        },
+        uptime_seconds: {
+          bsonType: "int",
+          minimum: 0
+        },
+        downtime_seconds: {
+          bsonType: "int",
+          minimum: 0
+        }
+      }
+    }
+  }
+});
 ```
 
 ---
 
-### 2.2 Tabla: `metrics`
+### 2.2 Colección: `metrics`
 
-**Descripción:** Almacena las métricas de disco reportadas por cada cliente.
+**Descripción:** Historial de métricas de disco de cada cliente
 
-**Script SQL:**
-```sql
-CREATE TABLE metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    client_id VARCHAR(20) NOT NULL,
-    total_capacity BIGINT NOT NULL,
-    used_capacity BIGINT NOT NULL,
-    free_capacity BIGINT NOT NULL,
-    utilization_percent DECIMAL(5,2) NOT NULL,
-    growth_rate DECIMAL(10,2),
-    recorded_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_capacities CHECK (
-        total_capacity > 0 AND 
-        used_capacity >= 0 AND 
-        free_capacity >= 0 AND
-        used_capacity + free_capacity = total_capacity
-    ),
-    CONSTRAINT chk_utilization CHECK (
-        utilization_percent >= 0 AND utilization_percent <= 100
-    )
-);
-
-CREATE INDEX idx_metrics_client_id ON metrics(client_id);
-CREATE INDEX idx_metrics_recorded_at ON metrics(recorded_at DESC);
-CREATE INDEX idx_metrics_client_recorded ON metrics(client_id, recorded_at DESC);
+**Schema:**
+```javascript
+{
+  _id: ObjectId("..."),
+  client_id: "CLIENT_001",              // String, requerido
+  total_capacity: 1099511627776,        // Number (long) en bytes
+  used_capacity: 659706977280,          // Number (long) en bytes
+  free_capacity: 439804650496,          // Number (long) en bytes
+  utilization_percent: 60.0,            // Number (double), 0-100
+  growth_rate_mb_per_hour: 125.5,       // Number (double), puede ser negativo
+  recorded_at: ISODate("2026-03-02T14:30:45Z"), // Date
+  received_at: ISODate("2026-03-02T14:30:45.300Z") // Date (timestamp del servidor)
+}
 ```
 
-**Diccionario de Campos:**
+**Índices:**
+```javascript
+// Consultas de métricas por cliente ordenadas por fecha
+db.metrics.createIndex({ "client_id": 1, "recorded_at": -1 });
 
-| Campo | Tipo | Descripción | Restricciones |
-|-------|------|-------------|---------------|
-| `id` | INTEGER | Identificador único autoincremental | PRIMARY KEY, AUTOINCREMENT |
-| `client_id` | VARCHAR(20) | ID del cliente que reportó la métrica | NOT NULL, FOREIGN KEY → clients(client_id) |
-| `total_capacity` | BIGINT | Capacidad total del disco en bytes | NOT NULL, > 0, Rango: hasta 18 EB (exabytes) |
-| `used_capacity` | BIGINT | Espacio usado del disco en bytes | NOT NULL, >= 0 |
-| `free_capacity` | BIGINT | Espacio libre del disco en bytes | NOT NULL, >= 0 |
-| `utilization_percent` | DECIMAL(5,2) | Porcentaje de utilización (0.00 - 100.00) | NOT NULL, 0 ≤ valor ≤ 100 |
-| `growth_rate` | DECIMAL(10,2) | Tasa de crecimiento en MB/hora | NULL permitido, Puede ser negativo |
-| `recorded_at` | TIMESTAMP | Timestamp cuando se tomó la métrica | NOT NULL, Timestamp del cliente |
-| `created_at` | TIMESTAMP | Timestamp de inserción en BD | DEFAULT CURRENT_TIMESTAMP |
+// Búsqueda global de últimas métricas
+db.metrics.createIndex({ "recorded_at": -1 });
 
-**Cálculos y Validaciones:**
-```python
-# Verificación de integridad
-assert used_capacity + free_capacity == total_capacity
-
-# Cálculo de utilization_percent
-utilization_percent = (used_capacity / total_capacity) * 100
-
-# Growth rate (calculado comparando con métrica anterior)
-time_diff_hours = (current_recorded_at - previous_recorded_at).total_seconds() / 3600
-used_diff_mb = (current_used_capacity - previous_used_capacity) / (1024 ** 2)
-growth_rate = used_diff_mb / time_diff_hours
+// Índice compuesto para agregaciones
+db.metrics.createIndex({ "client_id": 1, "recorded_at": 1 });
 ```
 
-**Ejemplo de Registro:**
-```sql
-INSERT INTO metrics (
-    client_id, total_capacity, used_capacity, free_capacity,
-    utilization_percent, growth_rate, recorded_at
-) VALUES (
-    'CLIENT_001', 
-    1099511627776,  -- 1 TB en bytes
-    659706977280,   -- 600 GB usado
-    439804650496,   -- 400 GB libre
-    60.00,          -- 60% de uso
-    15.50,          -- Creciendo 15.5 MB/hora
-    '2026-03-02 14:35:00'
+**TTL Index (Limpieza automática de datos antiguos):**
+```javascript
+// Eliminar métricas después de 30 días
+db.metrics.createIndex(
+  { "recorded_at": 1 }, 
+  { expireAfterSeconds: 2592000 }  // 30 días = 2,592,000 segundos
 );
 ```
 
-**Consultas Típicas:**
-```sql
--- Última métrica de un cliente
-SELECT * FROM metrics 
-WHERE client_id = 'CLIENT_001' 
-ORDER BY recorded_at DESC 
-LIMIT 1;
+**Ejemplo de inserción:**
+```javascript
+const metricsDAO = new MetricsDAO(db);
 
--- Métricas de las últimas 24 horas
-SELECT * FROM metrics 
-WHERE client_id = 'CLIENT_001' 
-  AND recorded_at >= datetime('now', '-24 hours')
-ORDER BY recorded_at ASC;
-
--- Tendencia de utilización
-SELECT 
-    DATE(recorded_at) as date,
-    AVG(utilization_percent) as avg_utilization
-FROM metrics 
-WHERE client_id = 'CLIENT_001'
-GROUP BY DATE(recorded_at)
-ORDER BY date DESC;
+await metricsDAO.insertMetric({
+  client_id: "CLIENT_001",
+  total_capacity: 1099511627776,
+  used_capacity: 659706977280,
+  free_capacity: 439804650496,
+  utilization_percent: 60.0,
+  growth_rate_mb_per_hour: 125.5,
+  recorded_at: new Date(),
+  received_at: new Date()
+});
 ```
 
 ---
 
-### 2.3 Tabla: `global_metrics`
+### 2.3 Colección: `globalMetrics`
 
-**Descripción:** Almacena métricas agregadas de todo el cluster.
+**Descripción:** Métricas agregadas del cluster completo
 
-**Script SQL:**
-```sql
-CREATE TABLE global_metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    total_capacity_global BIGINT NOT NULL,
-    used_capacity_global BIGINT NOT NULL,
-    free_capacity_global BIGINT NOT NULL,
-    utilization_percent_global DECIMAL(5,2) NOT NULL,
-    growth_rate_global DECIMAL(10,2),
-    clients_up INTEGER NOT NULL DEFAULT 0,
-    clients_down INTEGER NOT NULL DEFAULT 0,
-    calculated_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_clients_total CHECK (clients_up + clients_down <= 9)
-);
-
-CREATE INDEX idx_global_metrics_calculated ON global_metrics(calculated_at DESC);
+**Schema:**
+```javascript
+{
+  _id: ObjectId("..."),
+  total_capacity_global: 9895604649984,  // Number (long) suma de todos los clientes UP
+  used_capacity_global: 5937362789990,   // Number (long)
+  free_capacity_global: 3958241859994,   // Number (long)
+  utilization_percent_global: 60.0,      // Number (double)
+  growth_rate_global_mb_per_hour: 1130.5, // Number (double)
+  clients_up: 8,                         // Number (int)
+  clients_down: 1,                       // Number (int)
+  calculated_at: ISODate("2026-03-02T14:30:50Z"), // Date
+  detailed_clients: [                    // Array de objetos con info de cada cliente
+    {
+      client_id: "CLIENT_001",
+      status: "UP",
+      utilization_percent: 60.0,
+      total_capacity: 1099511627776
+    },
+    // ... más clientes
+  ]
+}
 ```
 
-**Diccionario de Campos:**
-
-| Campo | Tipo | Descripción | Restricciones |
-|-------|------|-------------|---------------|
-| `id` | INTEGER | Identificador único autoincremental | PRIMARY KEY, AUTOINCREMENT |
-| `total_capacity_global` | BIGINT | Suma de capacidades totales de clientes UP | NOT NULL, SUM(total_capacity) |
-| `used_capacity_global` | BIGINT | Suma de capacidad usada de clientes UP | NOT NULL, SUM(used_capacity) |
-| `free_capacity_global` | BIGINT | Suma de capacidad libre de clientes UP | NOT NULL, SUM(free_capacity) |
-| `utilization_percent_global` | DECIMAL(5,2) | % de uso global del cluster | NOT NULL, (used/total) * 100 |
-| `growth_rate_global` | DECIMAL(10,2) | Tasa de crecimiento global en MB/hora | NULL permitido, SUM(growth_rates) |
-| `clients_up` | INTEGER | Número de clientes con estado UP | NOT NULL, DEFAULT 0 |
-| `clients_down` | INTEGER | Número de clientes con estado DOWN | NOT NULL, DEFAULT 0 |
-| `calculated_at` | TIMESTAMP | Timestamp del cálculo | NOT NULL |
-| `created_at` | TIMESTAMP | Timestamp de inserción | DEFAULT CURRENT_TIMESTAMP |
-
-**Ejemplo de Registro:**
-```sql
-INSERT INTO global_metrics (
-    total_capacity_global, used_capacity_global, free_capacity_global,
-    utilization_percent_global, growth_rate_global,
-    clients_up, clients_down, calculated_at
-) VALUES (
-    9895604649984,   -- ~9 TB total (9 clientes x 1TB c/u)
-    5937362789990,   -- ~5.4 TB usado
-    3958241859994,   -- ~3.6 TB libre
-    60.00,           -- 60% global
-    139.50,          -- 139.5 MB/hora crecimiento total
-    8,               -- 8 clientes UP
-    1,               -- 1 cliente DOWN
-    '2026-03-02 14:35:00'
-);
+**Índices:**
+```javascript
+// Obtener métricas globales más recientes
+db.globalMetrics.createIndex({ "calculated_at": -1 });
 ```
 
-**Consulta de Última Métrica Global:**
-```sql
-SELECT * FROM global_metrics 
-ORDER BY calculated_at DESC 
-LIMIT 1;
-```
-
----
-
-### 2.4 Tabla: `sent_messages`
-
-**Descripción:** Registro de mensajes enviados del servidor a los clientes con estado de ACK.
-
-**Script SQL:**
-```sql
-CREATE TABLE sent_messages (
-    message_id VARCHAR(50) PRIMARY KEY,
-    client_id VARCHAR(20) NOT NULL,
-    message_type VARCHAR(50) NOT NULL,
-    content TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'SENT',
-    sent_at TIMESTAMP NOT NULL,
-    ack_received_at TIMESTAMP,
-    response_time_ms INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_message_status CHECK (status IN ('SENT', 'ACKNOWLEDGED', 'TIMEOUT')),
-    CONSTRAINT chk_response_time CHECK (
-        (status = 'ACKNOWLEDGED' AND response_time_ms IS NOT NULL) OR
-        (status != 'ACKNOWLEDGED' AND response_time_ms IS NULL)
-    )
-);
-
-CREATE INDEX idx_messages_client_id ON sent_messages(client_id);
-CREATE INDEX idx_messages_status ON sent_messages(status);
-CREATE INDEX idx_messages_sent_at ON sent_messages(sent_at DESC);
-```
-
-**Diccionario de Campos:**
-
-| Campo | Tipo | Descripción | Restricciones |
-|-------|------|-------------|---------------|
-| `message_id` | VARCHAR(50) | ID único del mensaje (formato: MSG_timestamp_uuid) | PRIMARY KEY |
-| `client_id` | VARCHAR(20) | Cliente destinatario | NOT NULL, FOREIGN KEY → clients(client_id) |
-| `message_type` | VARCHAR(50) | Tipo de mensaje | NOT NULL, Ej: NOTIFICATION, ALERT, COMMAND |
-| `content` | TEXT | Contenido del mensaje | NOT NULL, Hasta 2 GB en SQLite |
-| `status` | VARCHAR(20) | Estado del mensaje | NOT NULL, SENT / ACKNOWLEDGED / TIMEOUT |
-| `sent_at` | TIMESTAMP | Timestamp de envío | NOT NULL |
-| `ack_received_at` | TIMESTAMP | Timestamp de recepción del ACK | NULL hasta que llega ACK |
-| `response_time_ms` | INTEGER | Tiempo de respuesta en milisegundos | NULL si no ACK, ack_time - sent_time |
-| `created_at` | TIMESTAMP | Timestamp de creación del registro | DEFAULT CURRENT_TIMESTAMP |
-
-**Estados del Mensaje:**
-- `SENT`: Mensaje enviado, esperando ACK
-- `ACKNOWLEDGED`: ACK recibido
-- `TIMEOUT`: ACK no recibido en tiempo límite (30 segundos)
-
-**Ejemplo de Registro:**
-```sql
--- Mensaje recién enviado
-INSERT INTO sent_messages (
-    message_id, client_id, message_type, content, status, sent_at
-) VALUES (
-    'MSG_1709390100_a3f2e1c4',
-    'CLIENT_001',
-    'NOTIFICATION',
-    'Sistema funcionando correctamente',
-    'SENT',
-    '2026-03-02 14:35:00'
-);
-
--- Actualizar cuando llega ACK
-UPDATE sent_messages 
-SET 
-    status = 'ACKNOWLEDGED',
-    ack_received_at = '2026-03-02 14:35:01.234',
-    response_time_ms = 1234
-WHERE message_id = 'MSG_1709390100_a3f2e1c4';
-```
-
-**Consultas Típicas:**
-```sql
--- Mensajes pendientes de ACK
-SELECT * FROM sent_messages 
-WHERE status = 'SENT' 
-  AND sent_at < datetime('now', '-30 seconds')
-ORDER BY sent_at ASC;
-
--- Estadísticas de ACK por cliente
-SELECT 
-    client_id,
-    COUNT(*) as total_messages,
-    SUM(CASE WHEN status = 'ACKNOWLEDGED' THEN 1 ELSE 0 END) as acked,
-    AVG(response_time_ms) as avg_response_time
-FROM sent_messages
-GROUP BY client_id;
+**Cálculo con Aggregation Pipeline:**
+```javascript
+async function calculateAndStoreGlobalMetrics(db) {
+  const activeClients = await db.collection('clients').aggregate([
+    { $match: { status: 'UP' } },
+    { $project: {
+        client_id: 1,
+        'last_metric.total_capacity': 1,
+        'last_metric.used_capacity': 1,
+        'last_metric.free_capacity': 1,
+        'last_metric.utilization_percent': 1
+      }
+    }
+  ]).toArray();
+  
+  const globalMetrics = {
+    total_capacity_global: 0,
+    used_capacity_global: 0,
+    free_capacity_global: 0,
+    clients_up: activeClients.length,
+    clients_down: await db.collection('clients').countDocuments({ status: 'DOWN' }),
+    calculated_at: new Date(),
+    detailed_clients: []
+  };
+  
+  for (const client of activeClients) {
+    const metric = client.last_metric || {};
+    globalMetrics.total_capacity_global += metric.total_capacity || 0;
+    globalMetrics.used_capacity_global += metric.used_capacity || 0;
+    globalMetrics.free_capacity_global += metric.free_capacity || 0;
+    
+    globalMetrics.detailed_clients.push({
+      client_id: client.client_id,
+      status: 'UP',
+      utilization_percent: metric.utilization_percent || 0,
+      total_capacity: metric.total_capacity || 0
+    });
+  }
+  
+  if (globalMetrics.total_capacity_global > 0) {
+    globalMetrics.utilization_percent_global = 
+      (globalMetrics.used_capacity_global / globalMetrics.total_capacity_global) * 100;
+  }
+  
+  await db.collection('globalMetrics').insertOne(globalMetrics);
+  return globalMetrics;
+}
 ```
 
 ---
 
-### 2.5 Tabla: `availability_events`
+### 2.4 Colección: `sentMessages`
 
-**Descripción:** Registro de eventos de cambio de estado (UP ↔ DOWN) para cálculo de availability.
+**Descripción:** Mensajes enviados desde el servidor a los clientes
 
-**Script SQL:**
-```sql
-CREATE TABLE availability_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    client_id VARCHAR(20) NOT NULL,
-    event_type VARCHAR(20) NOT NULL,
-    event_timestamp TIMESTAMP NOT NULL,
-    duration_seconds INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_event_type CHECK (event_type IN ('UP', 'DOWN'))
+**Schema:**
+```javascript
+{
+  _id: ObjectId("..."),
+  message_id: "MSG_1709390100_a3f2e1c4", // String, único
+  client_id: "CLIENT_001",               // String, requerido
+  content: "Sistema funcionando correctamente", // String
+  status: "PENDING",                     // Enum: ['PENDING', 'ACKNOWLEDGED', 'TIMEOUT']
+  sent_at: ISODate("2026-03-02T14:35:00Z"), // Date
+  ack_received_at: null,                 // Date o null
+  timeout_at: ISODate("2026-03-02T14:35:30Z"), // Date (sent_at + 30s)
+  attempts: 1,                           // Number (int)
+  metadata: {                            // Subdocumento opcional
+    priority: "normal",
+    category: "notification"
+  }
+}
+```
+
+**Índices:**
+```javascript
+db.sentMessages.createIndex({ "message_id": 1 }, { unique: true });
+db.sentMessages.createIndex({ "client_id": 1, "sent_at": -1 });
+db.sentMessages.createIndex({ "status": 1, "sent_at": -1 });
+
+// Para buscar mensajes pendientes que expiraron
+db.sentMessages.createIndex({ "status": 1, "timeout_at": 1 });
+```
+
+**Ejemplo de uso:**
+```javascript
+// Enviar mensaje y registrar
+const messageId = `MSG_${Date.now()}_${generateRandomHash()}`;
+await db.collection('sentMessages').insertOne({
+  message_id: messageId,
+  client_id: "CLIENT_001",
+  content: "Alerta: Utilización >90%",
+  status: "PENDING",
+  sent_at: new Date(),
+  ack_received_at: null,
+  timeout_at: new Date(Date.now() + 30000), // 30 segundos
+  attempts: 1,
+  metadata: {
+    priority: "high",
+    category: "alert"
+  }
+});
+
+// Actualizar cuando se recibe ACK
+await db.collection('sentMessages').updateOne(
+  { message_id: messageId },
+  { 
+    $set: { 
+      status: "ACKNOWLEDGED",
+      ack_received_at: new Date()
+    }
+  }
 );
-
-CREATE INDEX idx_events_client_id ON availability_events(client_id);
-CREATE INDEX idx_events_timestamp ON availability_events(event_timestamp);
-CREATE INDEX idx_events_client_timestamp ON availability_events(client_id, event_timestamp DESC);
-```
-
-**Diccionario de Campos:**
-
-| Campo | Tipo | Descripción | Restricciones |
-|-------|------|-------------|---------------|
-| `id` | INTEGER | Identificador único autoincremental | PRIMARY KEY, AUTOINCREMENT |
-| `client_id` | VARCHAR(20) | Cliente al que pertenece el evento | NOT NULL, FOREIGN KEY → clients(client_id) |
-| `event_type` | VARCHAR(20) | Tipo de evento (transición de estado) | NOT NULL, UP o DOWN |
-| `event_timestamp` | TIMESTAMP | Momento exacto del cambio de estado | NOT NULL |
-| `duration_seconds` | INTEGER | Duración en el estado anterior (segundos) | NULL para primer evento, Calculado posteriormente |
-| `created_at` | TIMESTAMP | Timestamp de creación del registro | DEFAULT CURRENT_TIMESTAMP |
-
-**Interpretación:**
-- Evento `UP`: Cliente pasó a estado UP (activo)
-- Evento `DOWN`: Cliente pasó a estado DOWN (inactivo)
-- `duration_seconds`: Tiempo que estuvo en el estado ANTERIOR
-
-**Ejemplo de Secuencia:**
-```sql
--- Cliente conecta y pasa a UP
-INSERT INTO availability_events (client_id, event_type, event_timestamp, duration_seconds)
-VALUES ('CLIENT_001', 'UP', '2026-03-02 14:00:00', NULL);
-
--- Cliente cae a DOWN después de 3600 segundos (1 hora)
-INSERT INTO availability_events (client_id, event_type, event_timestamp, duration_seconds)
-VALUES ('CLIENT_001', 'DOWN', '2026-03-02 15:00:00', 3600);
-
--- Cliente vuelve a UP después de 120 segundos (2 minutos)
-INSERT INTO availability_events (client_id, event_type, event_timestamp, duration_seconds)
-VALUES ('CLIENT_001', 'UP', '2026-03-02 15:02:00', 120);
-```
-
-**Cálculo de Availability:**
-```sql
--- Availability de un cliente en las últimas 24 horas
-SELECT 
-    client_id,
-    SUM(CASE WHEN event_type = 'UP' THEN duration_seconds ELSE 0 END) as uptime,
-    SUM(CASE WHEN event_type = 'DOWN' THEN duration_seconds ELSE 0 END) as downtime,
-    (SUM(CASE WHEN event_type = 'UP' THEN duration_seconds ELSE 0 END) * 100.0 / 
-     (SUM(duration_seconds))) as availability_percent
-FROM availability_events
-WHERE client_id = 'CLIENT_001'
-  AND event_timestamp >= datetime('now', '-24 hours')
-GROUP BY client_id;
 ```
 
 ---
 
-## 3. TABLA DE CONFIGURACIÓN (Opcional)
+### 2.5 Colección: `availabilityEvents`
 
-### 3.1 Tabla: `system_config`
+**Descripción:** Historial de cambios de estado de los clientes (UP ↔ DOWN)
 
-**Descripción:** Parámetros de configuración almacenados en BD (alternativa a archivo config).
-
-**Script SQL:**
-```sql
-CREATE TABLE system_config (
-    config_key VARCHAR(100) PRIMARY KEY,
-    config_value TEXT NOT NULL,
-    config_type VARCHAR(20) NOT NULL,
-    description TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_config_type CHECK (config_type IN ('INTEGER', 'STRING', 'FLOAT', 'BOOLEAN'))
-);
-
-CREATE INDEX idx_config_key ON system_config(config_key);
+**Schema:**
+```javascript
+{
+  _id: ObjectId("..."),
+  client_id: "CLIENT_001",              // String, requerido
+  event_type: "DOWN",                   // Enum: ['UP', 'DOWN']
+  event_timestamp: ISODate("2026-03-02T14:40:00Z"), // Date
+  previous_state: "UP",                 // String o null
+  duration_seconds: 120,                // Number (int), duración en el estado previo
+  reason: "TIMEOUT_EXCEEDED",           // String (opcional)
+  metadata: {                           // Subdocumento opcional
+    last_seen_at: ISODate("2026-03-02T14:38:30Z"),
+    timeout_threshold: 105
+  }
+}
 ```
 
-**Ejemplo de Registros:**
-```sql
-INSERT INTO system_config (config_key, config_value, config_type, description) VALUES
-('report_interval_seconds', '30', 'INTEGER', 'Intervalo de envío de métricas del cliente'),
-('inactivity_timeout_seconds', '105', 'INTEGER', 'Timeout para marcar cliente como inactivo'),
-('ack_timeout_seconds', '30', 'INTEGER', 'Timeout para esperar ACK de mensaje'),
-('max_clients', '9', 'INTEGER', 'Máximo número de clientes simultáneos'),
-('availability_window_hours', '24', 'INTEGER', 'Ventana de tiempo para cálculo de availability');
+**Índices:**
+```javascript
+// Consultas de disponibilidad por cliente y rango de fechas
+db.availabilityEvents.createIndex({ "client_id": 1, "event_timestamp": 1 });
+
+// Búsqueda de eventos recientes
+db.availabilityEvents.createIndex({ "event_timestamp": -1 });
+```
+
+**TTL Index:**
+```javascript
+// Eliminar eventos después de 90 días
+db.availabilityEvents.createIndex(
+  { "event_timestamp": 1 }, 
+  { expireAfterSeconds: 7776000 }  // 90 días
+);
+```
+
+**Ejemplo de registro:**
+```javascript
+async function logStateChange(db, clientId, newState, previousState) {
+  const event = {
+    client_id: clientId,
+    event_type: newState,
+    event_timestamp: new Date(),
+    previous_state: previousState,
+    reason: newState === 'DOWN' ? 'TIMEOUT_EXCEEDED' : 'METRICS_RECEIVED'
+  };
+  
+  await db.collection('availabilityEvents').insertOne(event);
+}
 ```
 
 ---
 
-## 4. POLÍTICAS DE RETENCIÓN Y LIMPIEZA
+## 3. DATA ACCESS OBJECTS (DAOs)
 
-### 4.1 Script de Limpieza Automática
+### 3.1 ClientsDAO
 
-```sql
--- Eliminar métricas más antiguas de 30 días
-DELETE FROM metrics 
-WHERE recorded_at < datetime('now', '-30 days');
+```javascript
+// ClientsDAO.js
+class ClientsDAO {
+  constructor(db) {
+    this.collection = db.collection('clients');
+  }
+  
+  async registerClient(clientData) {
+    const client = {
+      client_id: clientData.client_id,
+      client_name: clientData.client_name || `Cliente ${clientData.client_id}`,
+      ip_address: clientData.ip_address,
+      hostname: clientData.hostname,
+      status: 'UP',
+      connected_at: new Date(),
+      last_seen_at: new Date(),
+      uptime_seconds: 0,
+      downtime_seconds: 0,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+    
+    await this.collection.updateOne(
+      { client_id: client.client_id },
+      { $set: client },
+      { upsert: true }
+    );
+    
+    return client;
+  }
+  
+  async updateLastSeen(clientId) {
+    await this.collection.updateOne(
+      { client_id: clientId },
+      { 
+        $set: { 
+          last_seen_at: new Date(),
+          updated_at: new Date()
+        }
+      }
+    );
+  }
+  
+  async updateStatus(clientId, status) {
+    await this.collection.updateOne(
+      { client_id: clientId },
+      { 
+        $set: { 
+          status,
+          updated_at: new Date()
+        }
+      }
+    );
+  }
+  
+  async updateLastMetric(clientId, metric) {
+    await this.collection.updateOne(
+      { client_id: clientId },
+      { 
+        $set: { 
+          last_metric: metric,
+          updated_at: new Date()
+        }
+      }
+    );
+  }
+  
+  async getClientsByStatus(status) {
+    return await this.collection.find({ status }).toArray();
+  }
+  
+  async getAllClients() {
+    return await this.collection.find().toArray();
+  }
+  
+  async getClient(clientId) {
+    return await this.collection.findOne({ client_id: clientId });
+  }
+}
 
--- Eliminar métricas globales más antiguas de 90 días
-DELETE FROM global_metrics 
-WHERE calculated_at < datetime('now', '-90 days');
-
--- Eliminar mensajes con ACK más antiguos de 7 días
-DELETE FROM sent_messages 
-WHERE status = 'ACKNOWLEDGED' 
-  AND ack_received_at < datetime('now', '-7 days');
-
--- Eliminar mensajes sin ACK más antiguos de 30 días
-DELETE FROM sent_messages 
-WHERE status IN ('SENT', 'TIMEOUT')
-  AND sent_at < datetime('now', '-30 days');
-
--- Eliminar eventos de availability más antiguos de 90 días
-DELETE FROM availability_events 
-WHERE event_timestamp < datetime('now', '-90 days');
-
--- Optimizar base de datos después de limpieza
-VACUUM;
-ANALYZE;
-```
-
-### 4.2 Política de Retención Recomendada
-
-| Tabla | Retención | Justificación |
-|-------|-----------|---------------|
-| `clients` | Permanente | Datos maestros |
-| `metrics` | 30 días | Suficiente para análisis histórico |
-| `global_metrics` | 90 días | Análisis de tendencias a largo plazo |
-| `sent_messages` (ACK) | 7 días | Auditoría reciente |
-| `sent_messages` (no ACK) | 30 días | Investigación de problemas |
-| `availability_events` | 90 días | Cálculo de SLA trimestral |
-
----
-
-## 5. TRIGGERS PARA AUTOMATIZACIÓN
-
-### 5.1 Trigger: Actualizar `updated_at` en Clientes
-
-```sql
-CREATE TRIGGER update_clients_timestamp 
-AFTER UPDATE ON clients
-FOR EACH ROW
-BEGIN
-    UPDATE clients 
-    SET updated_at = CURRENT_TIMESTAMP 
-    WHERE client_id = NEW.client_id;
-END;
-```
-
-### 5.2 Trigger: Validar Integridad de Métricas
-
-```sql
-CREATE TRIGGER validate_metrics_integrity 
-BEFORE INSERT ON metrics
-FOR EACH ROW
-BEGIN
-    SELECT CASE
-        WHEN NEW.used_capacity + NEW.free_capacity != NEW.total_capacity THEN
-            RAISE(ABORT, 'Capacidades no suman correctamente')
-        WHEN NEW.utilization_percent < 0 OR NEW.utilization_percent > 100 THEN
-            RAISE(ABORT, 'Porcentaje de utilización fuera de rango')
-    END;
-END;
-```
-
-### 5.3 Trigger: Auto-calcular `response_time_ms`
-
-```sql
-CREATE TRIGGER calculate_response_time 
-AFTER UPDATE OF ack_received_at ON sent_messages
-FOR EACH ROW
-WHEN NEW.ack_received_at IS NOT NULL
-BEGIN
-    UPDATE sent_messages 
-    SET response_time_ms = (
-        CAST((julianday(NEW.ack_received_at) - julianday(NEW.sent_at)) * 86400000 AS INTEGER)
-    )
-    WHERE message_id = NEW.message_id;
-END;
+module.exports = ClientsDAO;
 ```
 
 ---
 
-## 6. VISTAS ÚTILES
+### 3.2 MetricsDAO
 
-### 6.1 Vista: Resumen de Clientes
+```javascript
+// MetricsDAO.js
+class MetricsDAO {
+  constructor(db) {
+    this.collection = db.collection('metrics');
+  }
+  
+  async insertMetric(metric) {
+    const doc = {
+      ...metric,
+      received_at: new Date()
+    };
+    
+    const result = await this.collection.insertOne(doc);
+    return result.insertedId;
+  }
+  
+  async getLatestMetric(clientId) {
+    const metrics = await this.collection
+      .find({ client_id: clientId })
+      .sort({ recorded_at: -1 })
+      .limit(1)
+      .toArray();
+    
+    return metrics[0] || null;
+  }
+  
+  async getMetricsInWindow(clientId, hoursBack) {
+    const startTime = new Date(Date.now() - (hoursBack * 60 * 60 * 1000));
+    
+    return await this.collection
+      .find({
+        client_id: clientId,
+        recorded_at: { $gte: startTime }
+      })
+      .sort({ recorded_at: 1 })
+      .toArray();
+  }
+  
+  async getMetricsByDateRange(clientId, startDate, endDate) {
+    return await this.collection
+      .find({
+        client_id: clientId,
+        recorded_at: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      })
+      .sort({ recorded_at: 1 })
+      .toArray();
+  }
+  
+  async getAllLatestMetrics() {
+    return await this.collection.aggregate([
+      { $sort: { recorded_at: -1 } },
+      { 
+        $group: {
+          _id: "$client_id",
+          latestMetric: { $first: "$$ROOT" }
+        }
+      },
+      { $replaceRoot: { newRoot: "$latestMetric" } }
+    ]).toArray();
+  }
+}
 
-```sql
-CREATE VIEW v_clients_summary AS
-SELECT 
-    c.client_id,
-    c.ip_address,
-    c.status,
-    c.last_seen_at,
-    CAST((julianday('now') - julianday(c.last_seen_at)) * 86400 AS INTEGER) as seconds_since_last_seen,
-    m.total_capacity,
-    m.used_capacity,
-    m.free_capacity,
-    m.utilization_percent,
-    m.growth_rate
-FROM clients c
-LEFT JOIN (
-    SELECT m1.*
-    FROM metrics m1
-    INNER JOIN (
-        SELECT client_id, MAX(recorded_at) as max_time
-        FROM metrics
-        GROUP BY client_id
-    ) m2 ON m1.client_id = m2.client_id AND m1.recorded_at = m2.max_time
-) m ON c.client_id = m.client_id;
-```
-
-### 6.2 Vista: Estadísticas de Mensajería
-
-```sql
-CREATE VIEW v_messaging_stats AS
-SELECT 
-    client_id,
-    COUNT(*) as total_messages,
-    SUM(CASE WHEN status = 'ACKNOWLEDGED' THEN 1 ELSE 0 END) as acked_count,
-    SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) as timeout_count,
-    ROUND(AVG(CASE WHEN response_time_ms IS NOT NULL THEN response_time_ms END), 2) as avg_response_time_ms,
-    MIN(response_time_ms) as min_response_time_ms,
-    MAX(response_time_ms) as max_response_time_ms
-FROM sent_messages
-GROUP BY client_id;
-```
-
-### 6.3 Vista: Availability Actual
-
-```sql
-CREATE VIEW v_current_availability AS
-SELECT 
-    c.client_id,
-    c.status,
-    ROUND(
-        (c.total_uptime_seconds * 100.0) / 
-        NULLIF(c.total_uptime_seconds + c.total_downtime_seconds, 0),
-        3
-    ) as availability_percent,
-    c.total_uptime_seconds,
-    c.total_downtime_seconds,
-    CASE 
-        WHEN (c.total_uptime_seconds * 100.0) / 
-             NULLIF(c.total_uptime_seconds + c.total_downtime_seconds, 0) >= 99.9 
-        THEN 'YES' 
-        ELSE 'NO' 
-    END as meets_sla
-FROM clients c
-WHERE c.total_uptime_seconds + c.total_downtime_seconds > 0;
-```
-
----
-
-## 7. SCRIPT DE INICIALIZACIÓN COMPLETO
-
-### init_database.sql
-
-```sql
--- ============================================================================
--- SCRIPT DE INICIALIZACIÓN DE BASE DE DATOS
--- Storage Cluster con Nodo Central de Monitoreo
--- ============================================================================
-
--- Eliminar tablas si existen (solo para reinicio limpio)
-DROP TABLE IF EXISTS availability_events;
-DROP TABLE IF EXISTS sent_messages;
-DROP TABLE IF EXISTS global_metrics;
-DROP TABLE IF EXISTS metrics;
-DROP TABLE IF EXISTS clients;
-DROP TABLE IF EXISTS system_config;
-
--- ============================================================================
--- TABLA: clients
--- ============================================================================
-CREATE TABLE clients (
-    client_id VARCHAR(20) PRIMARY KEY,
-    ip_address VARCHAR(15) NOT NULL,
-    port INTEGER NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'DISCONNECTED',
-    first_connected_at TIMESTAMP NOT NULL,
-    last_seen_at TIMESTAMP NOT NULL,
-    total_uptime_seconds INTEGER DEFAULT 0,
-    total_downtime_seconds INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_status CHECK (status IN ('UP', 'DOWN', 'DISCONNECTED', 'CONNECTED')),
-    CONSTRAINT chk_client_id CHECK (client_id GLOB 'CLIENT_[0-9][0-9][0-9]')
-);
-
-CREATE INDEX idx_clients_status ON clients(status);
-CREATE INDEX idx_clients_last_seen ON clients(last_seen_at);
-
--- ============================================================================
--- TABLA: metrics
--- ============================================================================
-CREATE TABLE metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    client_id VARCHAR(20) NOT NULL,
-    total_capacity BIGINT NOT NULL,
-    used_capacity BIGINT NOT NULL,
-    free_capacity BIGINT NOT NULL,
-    utilization_percent DECIMAL(5,2) NOT NULL,
-    growth_rate DECIMAL(10,2),
-    recorded_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_capacities CHECK (
-        total_capacity > 0 AND 
-        used_capacity >= 0 AND 
-        free_capacity >= 0
-    ),
-    CONSTRAINT chk_utilization CHECK (
-        utilization_percent >= 0 AND utilization_percent <= 100
-    )
-);
-
-CREATE INDEX idx_metrics_client_id ON metrics(client_id);
-CREATE INDEX idx_metrics_recorded_at ON metrics(recorded_at DESC);
-CREATE INDEX idx_metrics_client_recorded ON metrics(client_id, recorded_at DESC);
-
--- ============================================================================
--- TABLA: global_metrics
--- ============================================================================
-CREATE TABLE global_metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    total_capacity_global BIGINT NOT NULL,
-    used_capacity_global BIGINT NOT NULL,
-    free_capacity_global BIGINT NOT NULL,
-    utilization_percent_global DECIMAL(5,2) NOT NULL,
-    growth_rate_global DECIMAL(10,2),
-    clients_up INTEGER NOT NULL DEFAULT 0,
-    clients_down INTEGER NOT NULL DEFAULT 0,
-    calculated_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_clients_total CHECK (clients_up + clients_down <= 9)
-);
-
-CREATE INDEX idx_global_metrics_calculated ON global_metrics(calculated_at DESC);
-
--- ============================================================================
--- TABLA: sent_messages
--- ============================================================================
-CREATE TABLE sent_messages (
-    message_id VARCHAR(50) PRIMARY KEY,
-    client_id VARCHAR(20) NOT NULL,
-    message_type VARCHAR(50) NOT NULL,
-    content TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'SENT',
-    sent_at TIMESTAMP NOT NULL,
-    ack_received_at TIMESTAMP,
-    response_time_ms INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_message_status CHECK (status IN ('SENT', 'ACKNOWLEDGED', 'TIMEOUT'))
-);
-
-CREATE INDEX idx_messages_client_id ON sent_messages(client_id);
-CREATE INDEX idx_messages_status ON sent_messages(status);
-CREATE INDEX idx_messages_sent_at ON sent_messages(sent_at DESC);
-
--- ============================================================================
--- TABLA: availability_events
--- ============================================================================
-CREATE TABLE availability_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    client_id VARCHAR(20) NOT NULL,
-    event_type VARCHAR(20) NOT NULL,
-    event_timestamp TIMESTAMP NOT NULL,
-    duration_seconds INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-    CONSTRAINT chk_event_type CHECK (event_type IN ('UP', 'DOWN'))
-);
-
-CREATE INDEX idx_events_client_id ON availability_events(client_id);
-CREATE INDEX idx_events_timestamp ON availability_events(event_timestamp);
-CREATE INDEX idx_events_client_timestamp ON availability_events(client_id, event_timestamp DESC);
-
--- ============================================================================
--- TABLA: system_config (Opcional)
--- ============================================================================
-CREATE TABLE system_config (
-    config_key VARCHAR(100) PRIMARY KEY,
-    config_value TEXT NOT NULL,
-    config_type VARCHAR(20) NOT NULL,
-    description TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_config_type CHECK (config_type IN ('INTEGER', 'STRING', 'FLOAT', 'BOOLEAN'))
-);
-
--- Insertar configuración por defecto
-INSERT INTO system_config (config_key, config_value, config_type, description) VALUES
-('report_interval_seconds', '30', 'INTEGER', 'Intervalo de envío de métricas del cliente'),
-('inactivity_timeout_seconds', '105', 'INTEGER', 'Timeout para marcar cliente como inactivo'),
-('ack_timeout_seconds', '30', 'INTEGER', 'Timeout para esperar ACK de mensaje'),
-('max_clients', '9', 'INTEGER', 'Máximo número de clientes simultáneos'),
-('availability_window_hours', '24', 'INTEGER', 'Ventana de tiempo para cálculo de availability');
-
--- ============================================================================
--- VISTAS
--- ============================================================================
-
-CREATE VIEW v_clients_summary AS
-SELECT 
-    c.client_id,
-    c.ip_address,
-    c.status,
-    c.last_seen_at,
-    CAST((julianday('now') - julianday(c.last_seen_at)) * 86400 AS INTEGER) as seconds_since_last_seen,
-    m.total_capacity,
-    m.used_capacity,
-    m.free_capacity,
-    m.utilization_percent,
-    m.growth_rate
-FROM clients c
-LEFT JOIN (
-    SELECT m1.*
-    FROM metrics m1
-    INNER JOIN (
-        SELECT client_id, MAX(recorded_at) as max_time
-        FROM metrics
-        GROUP BY client_id
-    ) m2 ON m1.client_id = m2.client_id AND m1.recorded_at = m2.max_time
-) m ON c.client_id = m.client_id;
-
--- ============================================================================
--- VERIFICACIÓN
--- ============================================================================
-
-SELECT 'Base de datos inicializada correctamente.' as status;
-SELECT COUNT(*) as total_tables FROM sqlite_master WHERE type='table';
-SELECT name as table_name FROM sqlite_master WHERE type='table' ORDER BY name;
+module.exports = MetricsDAO;
 ```
 
 ---
 
-## 8. ESTIMACIÓN DE CRECIMIENTO DE LA BASE DE DATOS
+### 3.3 GlobalMetricsDAO
 
-### 8.1 Cálculo de Tamaño
+```javascript
+// GlobalMetricsDAO.js
+class GlobalMetricsDAO {
+  constructor(db) {
+    this.collection = db.collection('globalMetrics');
+  }
+  
+  async getLatest() {
+    const metrics = await this.collection
+      .find()
+      .sort({ calculated_at: -1 })
+      .limit(1)
+      .toArray();
+    
+    return metrics[0] || null;
+  }
+  
+  async getHistory(limit = 100) {
+    return await this.collection
+      .find()
+      .sort({ calculated_at: -1 })
+      .limit(limit)
+      .toArray();
+  }
+  
+  async insertGlobalMetrics(metrics) {
+    const result = await this.collection.insertOne(metrics);
+    return result.insertedId;
+  }
+}
 
-**Asunciones:**
-- 9 clientes enviando métricas cada 30 segundos
-- 24/7 operación
-- Retención de 30 días para métricas
-
-**Cálculo:**
+module.exports = GlobalMetricsDAO;
 ```
-Métricas por cliente por día = (86400 segundos / 30 segundos) = 2,880 métricas
-Métricas totales por día = 2,880 × 9 = 25,920 métricas
-Métricas en 30 días = 25,920 × 30 = 777,600 métricas
-```
-
-**Tamaño por registro:**
-```
-Tabla metrics:
-- id: 4 bytes (INTEGER)
-- client_id: 20 bytes (VARCHAR)
-- capacities (3 campos): 24 bytes (3 × BIGINT)
-- utilization_percent: 8 bytes (DECIMAL)
-- growth_rate: 8 bytes (DECIMAL)
-- timestamps: 16 bytes (2 × TIMESTAMP)
-Total por registro: ~80 bytes
-
-Tamaño estimado tabla metrics (30 días):
-777,600 registros × 80 bytes = 62,208,000 bytes ≈ 59 MB
-```
-
-**Con índices (overhead 30%):**
-```
-Total estimado: 59 MB × 1.3 ≈ 77 MB
-```
-
-**Otras tablas:**
-- clients: < 1 MB
-- global_metrics: < 5 MB (30 días)
-- sent_messages: Variable, ~2-10 MB
-- availability_events: < 5 MB
-
-**Total estimado de BD después de 30 días: ~100 MB**
 
 ---
 
-## 9. BACKUP Y RECUPERACIÓN
+### 3.4 SentMessagesDAO
 
-### 9.1 Script de Backup (SQLite)
+```javascript
+// SentMessagesDAO.js
+class SentMessagesDAO {
+  constructor(db) {
+    this.collection = db.collection('sentMessages');
+  }
+  
+  async createMessage(messageData) {
+    const message = {
+      message_id: messageData.message_id,
+      client_id: messageData.client_id,
+      content: messageData.content,
+      status: 'PENDING',
+      sent_at: new Date(),
+      ack_received_at: null,
+      timeout_at: new Date(Date.now() + 30000), // 30s timeout
+      attempts: 1,
+      metadata: messageData.metadata || {}
+    };
+    
+    await this.collection.insertOne(message);
+    return message;
+  }
+  
+  async markAsAcknowledged(messageId) {
+    await this.collection.updateOne(
+      { message_id: messageId },
+      { 
+        $set: { 
+          status: 'ACKNOWLEDGED',
+          ack_received_at: new Date()
+        }
+      }
+    );
+  }
+  
+  async markAsTimeout(messageId) {
+    await this.collection.updateOne(
+      { message_id: messageId },
+      { $set: { status: 'TIMEOUT' } }
+    );
+  }
+  
+  async getPendingMessages() {
+    return await this.collection
+      .find({ status: 'PENDING' })
+      .sort({ sent_at: 1 })
+      .toArray();
+  }
+  
+  async getMessagesByClient(clientId, limit = 50) {
+    return await this.collection
+      .find({ client_id: clientId })
+      .sort({ sent_at: -1 })
+      .limit(limit)
+      .toArray();
+  }
+}
 
+module.exports = SentMessagesDAO;
+```
+
+---
+
+### 3.5 AvailabilityEventsDAO
+
+```javascript
+// AvailabilityEventsDAO.js
+class AvailabilityEventsDAO {
+  constructor(db) {
+    this.collection = db.collection('availabilityEvents');
+  }
+  
+  async logEvent(eventData) {
+    const event = {
+      client_id: eventData.client_id,
+      event_type: eventData.event_type,
+      event_timestamp: new Date(),
+      previous_state: eventData.previous_state || null,
+      reason: eventData.reason || null,
+      metadata: eventData.metadata || {}
+    };
+    
+    await this.collection.insertOne(event);
+    return event;
+  }
+  
+  async getEventsInWindow(clientId, hoursBack) {
+    const startTime = new Date(Date.now() - (hoursBack * 60 * 60 * 1000));
+    
+    return await this.collection
+      .find({
+        client_id: clientId,
+        event_timestamp: { $gte: startTime }
+      })
+      .sort({ event_timestamp: 1 })
+      .toArray();
+  }
+  
+  async getRecentEvents(limit = 100) {
+    return await this.collection
+      .find()
+      .sort({ event_timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  }
+}
+
+module.exports = AvailabilityEventsDAO;
+```
+
+---
+
+## 4. SCRIPT DE INICIALIZACIÓN
+
+### 4.1 init_database.js
+
+```javascript
+// init_database.js - Inicialización de la base de datos MongoDB
+const { MongoClient } = require('mongodb');
+
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
+const DB_NAME = 'storage_cluster';
+
+async function initializeDatabase() {
+  const client = new MongoClient(MONGO_URL);
+  
+  try {
+    await client.connect();
+    console.log('✅ Conectado a MongoDB');
+    
+    const db = client.db(DB_NAME);
+    
+    // 1. Crear colección 'clients' con validación
+    console.log('\n📦 Creando colección: clients');
+    try {
+      await db.createCollection('clients', {
+        validator: {
+          $jsonSchema: {
+            bsonType: 'object',
+            required: ['client_id', 'status', 'ip_address'],
+            properties: {
+              client_id: {
+                bsonType: 'string',
+                pattern: '^CLIENT_[0-9]{3}$'
+              },
+              status: {
+                enum: ['UP', 'DOWN', 'DISCONNECTED']
+              },
+              ip_address: { bsonType: 'string' },
+              uptime_seconds: { bsonType: 'int', minimum: 0 },
+              downtime_seconds: { bsonType: 'int', minimum: 0 }
+            }
+          }
+        }
+      });
+      console.log('   ✓ Colección clients creada');
+    } catch (err) {
+      if (err.codeName === 'NamespaceExists') {
+        console.log('   ⚠️  Colección clients ya existe');
+      } else {
+        throw err;
+      }
+    }
+    
+    // Crear índices para clients
+    await db.collection('clients').createIndex({ client_id: 1 }, { unique: true });
+    await db.collection('clients').createIndex({ status: 1 });
+    await db.collection('clients').createIndex({ last_seen_at: -1 });
+    console.log('   ✓ Índices creados para clients');
+    
+    // 2. Crear colección 'metrics'
+    console.log('\n📦 Creando colección: metrics');
+    await db.createCollection('metrics').catch(() => {});
+    
+    // Índices para metrics
+    await db.collection('metrics').createIndex({ client_id: 1, recorded_at: -1 });
+    await db.collection('metrics').createIndex({ recorded_at: -1 });
+    
+    // TTL Index: eliminar métricas después de 30 días
+    await db.collection('metrics').createIndex(
+      { recorded_at: 1 },
+      { expireAfterSeconds: 2592000 }
+    );
+    console.log('   ✓ Índices creados para metrics (con TTL 30 días)');
+    
+    // 3. Crear colección 'globalMetrics'
+    console.log('\n📦 Creando colección: globalMetrics');
+    await db.createCollection('globalMetrics').catch(() => {});
+    await db.collection('globalMetrics').createIndex({ calculated_at: -1 });
+    console.log('   ✓ Índices creados para globalMetrics');
+    
+    // 4. Crear colección 'sentMessages'
+    console.log('\n📦 Creando colección: sentMessages');
+    await db.createCollection('sentMessages').catch(() => {});
+    await db.collection('sentMessages').createIndex({ message_id: 1 }, { unique: true });
+    await db.collection('sentMessages').createIndex({ client_id: 1, sent_at: -1 });
+    await db.collection('sentMessages').createIndex({ status: 1, sent_at: -1 });
+    await db.collection('sentMessages').createIndex({ status: 1, timeout_at: 1 });
+    console.log('   ✓ Índices creados para sentMessages');
+    
+    // 5. Crear colección 'availabilityEvents'
+    console.log('\n📦 Creando colección: availabilityEvents');
+    await db.createCollection('availabilityEvents').catch(() => {});
+    await db.collection('availabilityEvents').createIndex({ client_id: 1, event_timestamp: 1 });
+    await db.collection('availabilityEvents').createIndex({ event_timestamp: -1 });
+    
+    // TTL Index: eliminar eventos después de 90 días
+    await db.collection('availabilityEvents').createIndex(
+      { event_timestamp: 1 },
+      { expireAfterSeconds: 7776000 }
+    );
+    console.log('   ✓ Índices creados para availabilityEvents (con TTL 90 días)');
+    
+    // 6. Insertar datos de prueba (opcional)
+    console.log('\n🌱 Insertando datos de prueba...');
+    const clientsCount = await db.collection('clients').countDocuments();
+    
+    if (clientsCount === 0) {
+      const testClients = [];
+      for (let i = 1; i <= 9; i++) {
+        testClients.push({
+          client_id: `CLIENT_${String(i).padStart(3, '0')}`,
+          client_name: `Servidor Regional ${i}`,
+          ip_address: `192.168.1.${10 + i}`,
+          hostname: `SERVER-REG-${String(i).padStart(2, '0')}`,
+          status: 'DISCONNECTED',
+          connected_at: null,
+          last_seen_at: null,
+          uptime_seconds: 0,
+          downtime_seconds: 0,
+          created_at: new Date(),
+          updated_at: new Date()
+        });
+      }
+      
+      await db.collection('clients').insertMany(testClients);
+      console.log(`   ✓ ${testClients.length} clientes de prueba insertados`);
+    } else {
+      console.log('   ⚠️  Ya existen clientes en la base de datos');
+    }
+    
+    console.log('\n✅ Base de datos inicializada correctamente');
+    console.log('\n📊 Resumen de colecciones:');
+    const collections = await db.listCollections().toArray();
+    collections.forEach(col => {
+      console.log(`   • ${col.name}`);
+    });
+    
+  } catch (error) {
+    console.error('❌ Error al inicializar la base de datos:', error);
+    process.exit(1);
+  } finally {
+    await client.close();
+    console.log('\n🔌 Conexión cerrada');
+  }
+}
+
+// Ejecutar si es el script principal
+if (require.main === module) {
+  initializeDatabase();
+}
+
+module.exports = { initializeDatabase };
+```
+
+**Uso:**
 ```bash
-#!/bin/bash
-# backup_database.sh
+# Instalar dependencias
+npm install mongodb
 
-DB_PATH="./data/storage_cluster.db"
-BACKUP_DIR="./backups"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-BACKUP_FILE="$BACKUP_DIR/storage_cluster_$TIMESTAMP.db"
+# Configurar variable de entorno (opcional)
+export MONGO_URL="mongodb://localhost:27017"
 
-# Crear directorio de backups si no existe
-mkdir -p $BACKUP_DIR
-
-# Backup usando SQLite
-sqlite3 $DB_PATH ".backup '$BACKUP_FILE'"
-
-# Comprimir backup
-gzip $BACKUP_FILE
-
-echo "Backup completado: ${BACKUP_FILE}.gz"
-
-# Eliminar backups más antiguos de 7 días
-find $BACKUP_DIR -name "*.gz" -mtime +7 -delete
+# Ejecutar script
+node init_database.js
 ```
 
-### 9.2 Script de Restore
+---
 
-```bash
-#!/bin/bash
-# restore_database.sh
+## 5. BACKUPS Y MANTENIMIENTO
 
-BACKUP_FILE=$1
-DB_PATH="./data/storage_cluster.db"
+### 5.1 Script de Backup
 
-if [ -z "$BACKUP_FILE" ]; then
-    echo "Uso: ./restore_database.sh <archivo_backup.db.gz>"
-    exit 1
-fi
+```javascript
+// backup.js - Backup de MongoDB
+const { MongoClient } = require('mongodb');
+const { exec } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
-# Descomprimir
-gunzip -c $BACKUP_FILE > /tmp/restore.db
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
+const DB_NAME = 'storage_cluster';
+const BACKUP_DIR = process.env.BACKUP_DIR || './backups';
 
-# Restaurar
-cp /tmp/restore.db $DB_PATH
+async function createBackup() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(BACKUP_DIR, `backup_${timestamp}`);
+  
+  // Crear directorio de backups si no existe
+  if (!fs.existsSync(BACKUP_DIR)) {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  }
+  
+  console.log(`📦 Creando backup en: ${backupPath}`);
+  
+  const command = `mongodump --uri="${MONGO_URL}" --db=${DB_NAME} --out="${backupPath}"`;
+  
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error('❌ Error al crear backup:', error);
+        reject(error);
+      } else {
+        console.log('✅ Backup creado exitosamente');
+        console.log(stdout);
+        resolve(backupPath);
+      }
+    });
+  });
+}
 
-echo "Base de datos restaurada desde: $BACKUP_FILE"
+if (require.main === module) {
+  createBackup();
+}
+
+module.exports = { createBackup };
 ```
+
+### 5.2 Script de Restore
+
+```javascript
+// restore.js - Restaurar backup de MongoDB
+const { exec } = require('child_process');
+
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
+const DB_NAME = 'storage_cluster';
+
+async function restoreBackup(backupPath) {
+  console.log(`📥 Restaurando desde: ${backupPath}`);
+  
+  const command = `mongorestore --uri="${MONGO_URL}" --db=${DB_NAME} "${backupPath}/${DB_NAME}"`;
+  
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error('❌ Error al restaurar:', error);
+        reject(error);
+      } else {
+        console.log('✅ Backup restaurado exitosamente');
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}
+
+// Uso: node restore.js ./backups/backup_2026-03-02T10-00-00
+if (require.main === module) {
+  const backupPath = process.argv[2];
+  if (!backupPath) {
+    console.error('❌ Debe especificar la ruta del backup');
+    console.log('Uso: node restore.js <ruta_backup>');
+    process.exit(1);
+  }
+  restoreBackup(backupPath);
+}
+
+module.exports = { restoreBackup };
+```
+
+---
+
+## 6. CONSULTAS ÚTILES
+
+### 6.1 Consultas Administrativas
+
+```javascript
+// Obtener todos los clientes activos
+const activeClients = await db.collection('clients')
+  .find({ status: 'UP' })
+  .toArray();
+
+// Contar métricas por cliente
+const metricsCounts = await db.collection('metrics').aggregate([
+  { $group: {
+      _id: '$client_id',
+      count: { $sum: 1 },
+      avgUtilization: { $avg: '$utilization_percent' }
+    }
+  },
+  { $sort: { count: -1 } }
+]).toArray();
+
+// Clientes con utilización >80%
+const highUtilClients = await db.collection('clients').find({
+  'last_metric.utilization_percent': { $gt: 80 }
+}).toArray();
+
+// Mensajes sin ACK
+const pendingMessages = await db.collection('sentMessages')
+  .find({ 
+    status: 'PENDING',
+    timeout_at: { $lt: new Date() }
+  })
+  .toArray();
+
+// Availability en las últimas 24h
+const last24h = new Date(Date.now() - (24 * 60 * 60 * 1000));
+const availabilityEvents = await db.collection('availabilityEvents')
+  .find({
+    event_timestamp: { $gte: last24h }
+  })
+  .sort({ event_timestamp: 1 })
+  .toArray();
+```
+
+### 6.2 Agregaciones Complejas
+
+```javascript
+// Métricas promedio por cliente en las últimas 24h
+const avgMetrics = await db.collection('metrics').aggregate([
+  { 
+    $match: { 
+      recorded_at: { $gte: new Date(Date.now() - (24 * 60 * 60 * 1000)) }
+    }
+  },
+  {
+    $group: {
+      _id: '$client_id',
+      avgUtilization: { $avg: '$utilization_percent' },
+      avgGrowthRate: { $avg: '$growth_rate_mb_per_hour' },
+      totalCapacity: { $max: '$total_capacity' },
+      count: { $sum: 1 }
+    }
+  },
+  { $sort: { avgUtilization: -1 } }
+]).toArray();
+
+// Timeline de disponibilidad
+const availabilityTimeline = await db.collection('availabilityEvents').aggregate([
+  { $match: { client_id: 'CLIENT_001' } },
+  { $sort: { event_timestamp: 1 } },
+  {
+    $group: {
+      _id: { $dateToString: { format: '%Y-%m-%d', date: '$event_timestamp' } },
+      events: { $push: '$$ROOT' },
+      downs: { $sum: { $cond: [{ $eq: ['$event_type', 'DOWN'] }, 1, 0] } }
+    }
+  }
+]).toArray();
+```
+
+---
+
+## 7. POLÍTICAS DE RETENCIÓN
+
+| Colección | Política | Implementación |
+|-----------|----------|----------------|
+| **clients** | Permanente | Sin TTL |
+| **metrics** | 30 días | TTL Index en `recorded_at` |
+| **globalMetrics** | 90 días | Limpieza manual o TTL opcional |
+| **sentMessages** | 7 días | Limpieza programada |
+| **availabilityEvents** | 90 días | TTL Index en `event_timestamp` |
+
+**Script de limpieza manual:**
+```javascript
+// cleanup.js
+async function cleanupOldData(db) {
+  const now = new Date();
+  
+  // Limpiar métricas globales >90 días
+  const ninetyDaysAgo = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+  const result1 = await db.collection('globalMetrics').deleteMany({
+    calculated_at: { $lt: ninetyDaysAgo }
+  });
+  console.log(`✅ ${result1.deletedCount} métricas globales eliminadas`);
+  
+  // Limpiar mensajes >7 días
+  const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+  const result2 = await db.collection('sentMessages').deleteMany({
+    sent_at: { $lt: sevenDaysAgo }
+  });
+  console.log(`✅ ${result2.deletedCount} mensajes antiguos eliminados`);
+}
+```
+
+---
+
+## 8. RESUMEN DE VENTAJAS
+
+| Característica | SQL/SQLite | MongoDB | Ganancia |
+|----------------|------------|---------|----------|
+| **Schema Evolution** | Requiere ALTER TABLE | Flexible por diseño | ⚡ Mayor agilidad |
+| **JSON Handling** | Serialización manual | Nativo | ⚡ Menos código |
+| **Agregaciones** | JOINs complejos | Pipeline intuitivo | ⚡ Más legible |
+| **TTL Automático** | Trigger/Cron | Index built-in | ⚡ Sin código extra |
+| **Escalabilidad** | Vertical | Horizontal | ⚡ Preparado para crecer |
 
 ---
 
 **Documento generado:** Marzo 2, 2026  
-**Versión:** 1.0  
+**Versión:** 2.0 (MongoDB)  
 **Estado:** COMPLETO

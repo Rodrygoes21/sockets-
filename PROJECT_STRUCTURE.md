@@ -1,774 +1,423 @@
-# ESTRUCTURA DE CARPETAS DEL PROYECTO
+# ESTRUCTURA DEL PROYECTO - NODE.JS + REACT + MONGODB
 
-## STORAGE CLUSTER CON NODO CENTRAL DE MONITOREO
+## Storage Cluster con Nodo Central de Monitoreo
+
+**Stack Tecnológico:**
+- **Backend**: Node.js (clientes y servidor)
+- **Frontend**: React 18 + Vite
+- **Base de Datos**: MongoDB 6.0+
+- **Protocolo**: TCP/IP (módulo net)
 
 ---
 
-## 1. ESTRUCTURA GENERAL DEL PROYECTO
+## ESTRUCTURA COMPLETA
 
 ```
 storage-cluster/
 │
-├── README.md
-├── .gitignore
-├── requirements.txt (Python) / pom.xml (Java) / packages.config (C#)
-├── LICENSE
-│
-├── client/                      # Código del Nodo Cliente
+├── client/                          # Cliente (Nodo Regional)
 │   ├── src/
-│   │   ├── main.py / Main.java / Program.cs
-│   │   ├── config/
-│   │   │   ├── config_manager.py
-│   │   │   └── client_config.json
+│   │   ├── index.js                 # Punto de entrada
 │   │   ├── network/
-│   │   │   ├── socket_client.py
-│   │   │   ├── message_serializer.py
-│   │   │   └── connection_handler.py
+│   │   │   ├── SocketClient.js      # Conexión TCP con servidor
+│   │   │   └── MessageHandler.js    # Manejo de mensajes
 │   │   ├── metrics/
-│   │   │   ├── disk_monitor.py
-│   │   │   └── metrics_collector.py
+│   │   │   ├── DiskMonitor.js       # Recolección métricas (systeminformation)
+│   │   │   └── MetricsReporter.js   # Envío periódico
 │   │   ├── messaging/
-│   │   │   ├── message_receiver.py
-│   │   │   ├── message_processor.py
-│   │   │   ├── log_writer.py
-│   │   │   └── ack_sender.py
-│   │   └── utils/
-│   │       ├── logger.py
-│   │       └── constants.py
-│   │
-│   ├── tests/
-│   │   ├── test_socket_client.py
-│   │   ├── test_metrics_collector.py
-│   │   ├── test_message_processor.py
-│   │   └── integration/
-│   │       └── test_client_integration.py
-│   │
-│   ├── logs/                    # Logs de la aplicación cliente
-│   │   ├── client_app.log
-│   │   └── client_messages.log
-│   │
-│   ├── config/
-│   │   ├── client_config.json
-│   │   └── logging_config.ini
-│   │
-│   └── scripts/
-│       ├── start_client.sh
-│       └── install_dependencies.sh
-│
-├── server/                      # Código del Nodo Servidor Central
-│   ├── src/
-│   │   ├── main.py / Main.java / Program.cs
+│   │   │   ├── MessageReceiver.js   # Recepción mensajes servidor
+│   │   │   └── AckSender.js         # Envío ACKs
 │   │   ├── config/
-│   │   │   ├── config_manager.py
-│   │   │   └── server_config.json
-│   │   ├── network/
-│   │   │   ├── socket_server.py
-│   │   │   ├── connection_manager.py
-│   │   │   ├── client_handler.py
-│   │   │   └── message_protocol.py
-│   │   ├── business_logic/
-│   │   │   ├── metrics_processor.py
-│   │   │   ├── metrics_aggregator.py
-│   │   │   ├── inactivity_monitor.py
-│   │   │   ├── availability_calculator.py
-│   │   │   └── growth_rate_calculator.py
-│   │   ├── messaging/
-│   │   │   ├── message_sender.py
-│   │   │   ├── ack_handler.py
-│   │   │   └── message_manager.py
-│   │   ├── database/
-│   │   │   ├── db_manager.py
-│   │   │   ├── dao/
-│   │   │   │   ├── client_dao.py
-│   │   │   │   ├── metrics_dao.py
-│   │   │   │   ├── global_metrics_dao.py
-│   │   │   │   ├── message_dao.py
-│   │   │   │   └── availability_dao.py
-│   │   │   └── models/
-│   │   │       ├── client.py
-│   │   │       ├── metric.py
-│   │   │       ├── message.py
-│   │   │       └── availability_event.py
-│   │   ├── api/
-│   │   │   ├── rest_api.py
-│   │   │   ├── routes/
-│   │   │   │   ├── clients_routes.py
-│   │   │   │   ├── metrics_routes.py
-│   │   │   │   ├── messages_routes.py
-│   │   │   │   └── availability_routes.py
-│   │   │   └── middleware/
-│   │   │       ├── error_handler.py
-│   │   │       └── cors_handler.py
+│   │   │   ├── config.js            # Configuración
+│   │   │   └── logger.js            # Winston logger
 │   │   └── utils/
-│   │       ├── logger.py
-│   │       ├── constants.py
-│   │       └── helpers.py
-│   │
-│   ├── tests/
-│   │   ├── test_socket_server.py
-│   │   ├── test_connection_manager.py
-│   │   ├── test_metrics_aggregator.py
-│   │   ├── test_inactivity_monitor.py
-│   │   ├── test_api.py
-│   │   └── integration/
-│   │       ├── test_server_integration.py
-│   │       └── test_load.py
-│   │
-│   ├── logs/                    # Logs del servidor
-│   │   ├── server_app.log
-│   │   ├── connections.log
-│   │   ├── metrics.log
-│   │   └── errors.log
-│   │
+│   │       └── helpers.js
+│   ├── logs/                        # Archivos .log
 │   ├── config/
-│   │   ├── server_config.json
-│   │   └── logging_config.ini
-│   │
-│   └── scripts/
-│       ├── start_server.sh
-│       ├── install_dependencies.sh
-│       └── cleanup_old_logs.sh
+│   │   └── client_config.json
+│   ├── tests/
+│   │   ├── socket.test.js
+│   │   └── metrics.test.js
+│   ├── package.json
+│   ├── .env.example
+│   └── README.md
 │
-├── database/                    # Scripts y datos de base de datos
-│   ├── init_database.sql
-│   ├── migrations/
-│   │   ├── 001_initial_schema.sql
-│   │   ├── 002_add_indexes.sql
-│   │   └── 003_add_views.sql
-│   ├── seeds/                   # Datos de prueba (opcional)
-│   │   └── test_data.sql
-│   ├── backups/                 # Backups automáticos
-│   │   └── .gitkeep
-│   ├── data/                    # Archivos de base de datos
-│   │   └── storage_cluster.db
-│   └── scripts/
-│       ├── backup_database.sh
-│       ├── restore_database.sh
-│       └── cleanup_old_data.sql
+├── server/                          # Servidor Central
+│   ├── src/
+│   │   ├── index.js                 # Punto de entrada
+│   │   ├── network/
+│   │   │   ├── TcpServer.js         # Servidor TCP (net.createServer)
+│   │   │   └── ConnectionManager.js # Gestión de 9 clientes
+│   │   ├── business_logic/
+│   │   │   ├── MetricsProcessor.js  # Procesamiento métricas
+│   │   │   ├── MetricsAggregator.js # Métricas globales
+│   │   │   ├── InactivityMonitor.js # Detección nodos inactivos
+│   │   │   ├── GrowthRateCalculator.js
+│   │   │   └── AvailabilityCalculator.js
+│   │   ├── messaging/
+│   │   │   ├── MessageSender.js     # Envío mensajes a clientes
+│   │   │   └── AckHandler.js        # Procesamiento ACKs
+│   │   ├── database/
+│   │   │   ├── MongoClient.js       # Conexión MongoDB
+│   │   │   └── dao/                 # Data Access Objects
+│   │   │       ├── ClientsDAO.js
+│   │   │       ├── MetricsDAO.js
+│   │   │       ├── GlobalMetricsDAO.js
+│   │   │       ├── SentMessagesDAO.js
+│   │   │       └── AvailabilityEventsDAO.js
+│   │   ├── api/
+│   │   │   ├── app.js               # Express app
+│   │   │   ├── routes/
+│   │   │   │   ├── clientsRoutes.js
+│   │   │   │   ├── metricsRoutes.js
+│   │   │   │   └── messagesRoutes.js
+│   │   │   └── socketio/
+│   │   │       └── socketHandler.js # WebSocket para UI
+│   │   ├── config/
+│   │   │   ├── config.js
+│   │   │   └── logger.js
+│   │   └── utils/
+│   │       └── helpers.js
+│   ├── database/
+│   │   ├── init_database.js         # Script inicialización MongoDB
+│   │   ├── backup.js                # Script backup
+│   │   ├── restore.js               # Script restore
+│   │   └── cleanup.js               # Limpieza datos antiguos
+│   ├── logs/
+│   ├── config/
+│   │   └── server_config.json
+│   ├── tests/
+│   │   ├── tcp.test.js
+│   │   ├── api.test.js
+│   │   └── dao.test.js
+│   ├── package.json
+│   ├── .env.example
+│   └── README.md
 │
-├── ui/                          # Interfaz Gráfica
-│   ├── web/                     # Opción Web
-│   │   ├── index.html
-│   │   ├── css/
-│   │   │   ├── styles.css
-│   │   │   └── dashboard.css
-│   │   ├── js/
-│   │   │   ├── app.js
-│   │   │   ├── dashboard.js
-│   │   │   ├── client_view.js
-│   │   │   ├── global_metrics.js
-│   │   │   ├── messaging.js
-│   │   │   ├── availability.js
-│   │   │   └── api_client.js
-│   │   ├── assets/
-│   │   │   ├── images/
-│   │   │   └── icons/
-│   │   └── lib/                 # Librerías de terceros
-│   │       ├── chart.js
-│   │       └── moment.js
-│   │
-│   └── desktop/                 # Opción Desktop (si aplica)
-│       ├── src/
-│       │   ├── main_window.py
-│       │   ├── dashboard_view.py
-│       │   ├── client_detail_view.py
-│       │   └── messaging_view.py
-│       └── resources/
-│           ├── icons/
-│           └── styles.qss
+├── ui/                              # Dashboard React
+│   ├── src/
+│   │   ├── main.jsx                 # Punto de entrada
+│   │   ├── App.jsx                  # Componente raíz
+│   │   ├── components/
+│   │   │   ├── Dashboard/
+│   │   │   │   ├── Dashboard.jsx    # Vista principal
+│   │   │   │   ├── ClientCard.jsx
+│   │   │   │   └── GlobalMetrics.jsx
+│   │   │   ├── ClientDetail/
+│   │   │   │   ├── ClientDetail.jsx
+│   │   │   │   ├── MetricsChart.jsx # Chart.js
+│   │   │   │   └── AvailabilityTimeline.jsx
+│   │   │   ├── Messaging/
+│   │   │   │   ├── MessagePanel.jsx
+│   │   │   │   └── MessageHistory.jsx
+│   │   │   ├── Availability/
+│   │   │   │   └── AvailabilityView.jsx
+│   │   │   └── common/
+│   │   │       ├── Navbar.jsx
+│   │   │       ├── Sidebar.jsx
+│   │   │       └── AlertToast.jsx
+│   │   ├── services/
+│   │   │   ├── api.js               # Axios instance
+│   │   │   ├── clientsService.js
+│   │   │   ├── metricsService.js
+│   │   │   └── socketService.js     # Socket.io-client
+│   │   ├── context/
+│   │   │   └── AppContext.jsx       # Estado global
+│   │   ├── hooks/
+│   │   │   ├── useClients.js
+│   │   │   ├── useMetrics.js
+│   │   │   └── useWebSocket.js
+│   │   ├── utils/
+│   │   │   ├── formatters.js        # Formateo de datos
+│   │   │   └── constants.js
+│   │   └── styles/
+│   │       └── index.css
+│   ├── public/
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── .env.example
+│   └── README.md
 │
-├── docs/                        # Documentación
-│   ├── 01 - Practica 1 Implementacion de Sockets .pdf
-│   ├── PLAN_IMPLEMENTACION.md
+├── docs/                            # Documentación
 │   ├── ARQUITECTURA_TECNICA.md
 │   ├── DATABASE_DESIGN.md
-│   ├── PROTOCOL_SPECIFICATION.md
-│   ├── API_DOCUMENTATION.md
-│   ├── USER_MANUAL.md
-│   ├── INSTALLATION_GUIDE.md
-│   ├── TROUBLESHOOTING.md
-│   ├── diagrams/
-│   │   ├── architecture_diagram.png
-│   │   ├── sequence_diagrams.png
-│   │   ├── er_diagram.png
-│   │   └── class_diagrams.png
-│   └── presentation/
-│       ├── defensa_proyecto.pptx
-│       └── demo_screenshots/
+│   ├── PLAN_IMPLEMENTACION.md
+│   ├── PROJECT_STRUCTURE.md
+│   ├── README.md
+│   ├── TICKETS_DISTRIBUCION.md
+│   └── API_DOCUMENTATION.md
 │
-├── tests/                       # Pruebas de integración E2E
-│   ├── integration/
-│   │   ├── test_client_server_communication.py
-│   │   └── test_full_flow.py
-│   ├── load/
-│   │   ├── test_9_concurrent_clients.py
-│   │   └── benchmark_results.txt
-│   └── fixtures/
-│       ├── mock_metrics_data.json
-│       └── mock_clients.json
+├── tests/                           # Pruebas E2E
+│   └── integration/
+│       ├── full_flow.test.js
+│       └── load_test.js
 │
-├── scripts/                     # Scripts de utilidad
-│   ├── setup_environment.sh
-│   ├── deploy_client.sh
-│   ├── deploy_server.sh
-│   ├── run_all_tests.sh
-│   ├── generate_docs.sh
-│   └── simulate_clients.py       # Simulador de 9 clientes para pruebas
+├── scripts/                         # Utilidades
+│   ├── start_all.sh                 # Iniciar todo el sistema
+│   ├── stop_all.sh
+│   └── generate_clients.js          # Generar configs para 9 clientes
 │
-├── config/                      # Configuraciones globales
-│   ├── development.json
-│   ├── production.json
-│   └── test.json
-│
-└── deployment/                  # Archivos de despliegue
-    ├── docker/
-    │   ├── Dockerfile.client
-    │   ├── Dockerfile.server
-    │   └── docker-compose.yml
-    ├── systemd/
-    │   ├── storage-cluster-server.service
-    │   └── storage-cluster-client.service
-    └── ansible/                 # Automatización de despliegue (opcional)
-        ├── playbook.yml
-        └── inventory.ini
+├── .gitignore
+└── README.md                        # README maestro
 ```
 
 ---
 
-## 2. DESCRIPCIÓN DETALLADA DE CARPETAS
+## ARCHIVOS DE CONFIGURACIÓN
 
-### 2.1 `/client` - Nodo Cliente
-
-**Propósito:** Código fuente del cliente que se ejecuta en cada servidor regional.
-
-**Subcarpetas:**
-- **`src/`**: Código fuente principal
-  - **`config/`**: Gestión de configuración
-  - **`network/`**: Socket cliente y protocolo de comunicación
-  - **`metrics/`**: Recolección de métricas de disco
-  - **`messaging/`**: Recepción de mensajes, escritura en .log, envío de ACK
-  - **`utils/`**: Utilidades y constantes
-
-- **`tests/`**: Pruebas unitarias e integración del cliente
-
-- **`logs/`**: Archivos de log generados
-  - `client_app.log`: Logs de la aplicación
-  - `client_messages.log`: Mensajes recibidos del servidor
-
-- **`config/`**: Archivos de configuración
-  - `client_config.json`: Parámetros del cliente
-  - `logging_config.ini`: Configuración de logging
-
-- **`scripts/`**: Scripts de inicio y utilidades
-
----
-
-### 2.2 `/server` - Nodo Servidor Central
-
-**Propósito:** Código fuente del servidor que centraliza el monitoreo.
-
-**Subcarpetas:**
-- **`src/`**: Código fuente principal
-  - **`config/`**: Gestión de configuración
-  - **`network/`**: Socket servidor, gestor de conexiones, handlers
-  - **`business_logic/`**: Lógica de negocio (agregación, monitoreo, cálculos)
-  - **`messaging/`**: Envío de mensajes y manejo de ACKs
-  - **`database/`**: Capa de acceso a datos (DAOs, modelos)
-  - **`api/`**: API REST para la interfaz gráfica
-  - **`utils/`**: Utilidades
-
-- **`tests/`**: Pruebas unitarias, integración y carga
-
-- **`logs/`**: Archivos de log categorizados
-
-- **`config/`**: Configuración del servidor
-
-- **`scripts/`**: Scripts de gestión
-
----
-
-### 2.3 `/database` - Base de Datos
-
-**Propósito:** Scripts de base de datos y almacenamiento.
-
-**Contenido:**
-- **`init_database.sql`**: Script de inicialización completa
-- **`migrations/`**: Scripts de migración versionados
-- **`seeds/`**: Datos de prueba
-- **`backups/`**: Directorio para backups automáticos
-- **`data/`**: Archivos de base de datos (SQLite)
-- **`scripts/`**: Scripts de mantenimiento (backup, restore, limpieza)
-
----
-
-### 2.4 `/ui` - Interfaz Gráfica
-
-**Propósito:** Código de la interfaz de usuario.
-
-**Subcarpetas:**
-
-**Opción A: UI Web**
-- **`web/`**: Aplicación web
-  - `index.html`: Página principal
-  - **`css/`**: Estilos
-  - **`js/`**: JavaScript para interacción
-  - **`assets/`**: Recursos (imágenes, iconos)
-  - **`lib/`**: Librerías de terceros (Chart.js, etc.)
-
-**Opción B: UI Desktop**
-- **`desktop/`**: Aplicación de escritorio
-  - **`src/`**: Código de vistas y ventanas
-  - **`resources/`**: Recursos visuales
-
----
-
-### 2.5 `/docs` - Documentación
-
-**Propósito:** Documentación técnica y académica del proyecto.
-
-**Contenido:**
-- PDF del enunciado oficial
-- Documentos Markdown de diseño (arquitectura, BD, API)
-- Manuales de usuario e instalación
-- Diagramas (arquitectura, secuencia, ER, clases)
-- Presentación para defensa
-- Screenshots de demostración
-
----
-
-### 2.6 `/tests` - Pruebas End-to-End
-
-**Propósito:** Pruebas de integración que involucran cliente, servidor y BD.
-
-**Contenido:**
-- **`integration/`**: Pruebas de flujo completo
-- **`load/`**: Pruebas de carga con 9 clientes concurrentes
-- **`fixtures/`**: Datos de prueba simulados
-
----
-
-### 2.7 `/scripts` - Scripts de Utilidad
-
-**Propósito:** Scripts para configuración, despliegue y automatización.
-
-**Ejemplos:**
-- `setup_environment.sh`: Instalar dependencias
-- `deploy_client.sh`: Desplegar cliente en nodos
-- `run_all_tests.sh`: Ejecutar todas las pruebas
-- `simulate_clients.py`: Simulador de 9 clientes para testing
-
----
-
-### 2.8 `/config` - Configuraciones Globales
-
-**Propósito:** Archivos de configuración por ambiente.
-
-**Contenido:**
-- `development.json`: Configuración para desarrollo
-- `production.json`: Configuración para producción
-- `test.json`: Configuración para pruebas
-
----
-
-### 2.9 `/deployment` - Despliegue
-
-**Propósito:** Archivos para facilitar el despliegue en diferentes ambientes.
-
-**Contenido:**
-- **`docker/`**: Dockerfiles y docker-compose
-- **`systemd/`**: Services para Linux
-- **`ansible/`**: Automatización de despliegue (opcional avanzado)
-
----
-
-## 3. ARCHIVOS DE CONFIGURACIÓN PRINCIPALES
-
-### 3.1 `client_config.json`
-
+### client/config/client_config.json
 ```json
 {
-  "client_id": "CLIENT_001",
-  "server_ip": "192.168.1.100",
-  "server_port": 5000,
-  "report_interval_seconds": 30,
-  "connection_timeout_seconds": 10,
-  "reconnection_enabled": true,
-  "max_reconnection_attempts": -1,
-  "reconnection_backoff_seconds": [1, 2, 4, 8, 16, 30],
-  "log_directory": "./logs",
-  "log_max_size_mb": 10,
-  "log_retention_count": 5,
-  "disk_to_monitor": "first"
+  "clientId": "CLIENT_001",
+  "server": {
+    "host": "localhost",
+    "port": 5000
+  },
+  "metrics": {
+    "diskIndex": 0,
+    "reportIntervalSeconds": 30
+  },
+  "logging": {
+    "level": "info",
+    "file": "logs/client.log"
+  }
 }
 ```
 
----
-
-### 3.2 `server_config.json`
-
+### server/config/server_config.json
 ```json
 {
-  "server_ip": "0.0.0.0",
-  "server_port": 5000,
-  "max_clients": 9,
-  "inactivity_timeout_seconds": 105,
-  "ack_timeout_seconds": 30,
-  "monitoring_interval_seconds": 15,
-  "availability_window_hours": 24,
-  "database": {
-    "type": "sqlite",
-    "path": "./database/data/storage_cluster.db",
-    "connection_pool_size": 10
+  "tcp": {
+    "port": 5000,
+    "host": "0.0.0.0",
+    "maxClients": 9
   },
   "api": {
-    "enabled": true,
-    "host": "0.0.0.0",
-    "port": 8080
+    "port": 3000,
+    "cors": {
+      "origin": "http://localhost:5173"
+    }
   },
-  "log_directory": "./logs",
-  "log_max_size_mb": 50,
-  "log_retention_count": 10
+  "database": {
+    "url": "mongodb://localhost:27017",
+    "name": "storage_cluster"
+  },
+  "monitoring": {
+    "inactivityTimeoutSeconds": 105,
+    "checkIntervalSeconds": 15
+  },
+  "logging": {
+    "level": "info",
+    "file": "logs/server.log"
+  }
 }
 ```
 
----
-
-### 3.3 `.gitignore`
-
-```gitignore
-# Archivos de Base de Datos
-database/data/*.db
-database/backups/*.db
-database/backups/*.gz
-
-# Logs
-*.log
-logs/
-*.log.*
-
-# Configuraciones locales (no commitear IPs reales)
-config/production.json
-**/client_config.json
-**/server_config.json
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-.venv
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Java
-*.class
-*.jar
-*.war
-target/
-
-# C#
-bin/
-obj/
-*.exe
-*.dll
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Temporal
-tmp/
-temp/
-*.tmp
+### ui/.env.example
+```env
+VITE_API_URL=http://localhost:3000
+VITE_WS_URL=http://localhost:3000
 ```
 
 ---
 
-### 3.4 `requirements.txt` (Python)
+## COMANDOS DE GESTIÓN
 
-```txt
-# Networking y concurrencia
-# (librerías estándar de Python, no necesitan instalación)
-
-# Métricas del sistema
-psutil==5.9.5
-
-# Base de datos
-# (sqlite3 viene incluido en Python)
-
-# API REST
-flask==2.3.2
-flask-cors==4.0.0
-
-# Testing
-pytest==7.4.0
-pytest-cov==4.1.0
-
-# Utilities
-python-dateutil==2.8.2
-```
-
----
-
-## 4. CONVENCIONES DE NOMBRES
-
-### 4.1 Archivos y Carpetas
-
-- **Carpetas:** snake_case en minúsculas
-  - Ejemplo: `business_logic`, `database`, `api`
-
-- **Archivos Python:** snake_case en minúsculas
-  - Ejemplo: `socket_client.py`, `metrics_aggregator.py`
-
-- **Archivos de configuración:** snake_case
-  - Ejemplo: `client_config.json`, `logging_config.ini`
-
-- **Scripts:** snake_case con extensión apropiada
-  - Ejemplo: `start_server.sh`, `backup_database.sh`
-
----
-
-### 4.2 Código
-
-**Python:**
-- **Clases:** PascalCase
-  - Ejemplo: `ClientSocket`, `MetricsAggregator`
-
-- **Funciones y métodos:** snake_case
-  - Ejemplo: `get_disk_metrics()`, `send_message()`
-
-- **Constantes:** UPPER_SNAKE_CASE
-  - Ejemplo: `MAX_CLIENTS`, `DEFAULT_TIMEOUT`
-
-**Java:**
-- **Clases:** PascalCase
-  - Ejemplo: `ClientSocket`, `MetricsAggregator`
-
-- **Métodos:** camelCase
-  - Ejemplo: `getDiskMetrics()`, `sendMessage()`
-
-- **Constantes:** UPPER_SNAKE_CASE
-  - Ejemplo: `MAX_CLIENTS`, `DEFAULT_TIMEOUT`
-
----
-
-## 5. FLUJO DE DESARROLLO RECOMENDADO
-
-### Fase 1: Setup Inicial
+### Instalación
 ```bash
-# 1. Crear estructura de carpetas
-mkdir -p client/src/config client/src/network client/tests
-mkdir -p server/src/config server/src/network server/tests
-mkdir -p database/data database/backups
-mkdir -p ui/web/css ui/web/js
-mkdir -p docs/diagrams
-
-# 2. Inicializar base de datos
-sqlite3 database/data/storage_cluster.db < database/init_database.sql
-
-# 3. Instalar dependencias
-pip install -r requirements.txt
-```
-
-### Fase 2: Desarrollo del Cliente
-```bash
-cd client/src
-# Desarrollar módulos en este orden:
-# 1. config_manager
-# 2. socket_client
-# 3. disk_monitor
-# 4. message_serializer
-# 5. metrics_collector
-
-# Ejecutar pruebas
-cd ../tests
-pytest test_socket_client.py
-```
-
-### Fase 3: Desarrollo del Servidor
-```bash
-cd server/src
-# Desarrollar módulos en este orden:
-# 1. socket_server
-# 2. connection_manager
-# 3. database DAOs
-# 4. metrics_processor
-# 5. inactivity_monitor
-# 6. api
-
-# Ejecutar pruebas
-cd ../tests
-pytest
-```
-
-### Fase 4: Integración y UI
-```bash
-# Pruebas de integración
-cd tests/integration
-pytest test_full_flow.py
-
-# Desarrollar UI
-cd ui/web
-# Abrir index.html en navegador
-```
-
----
-
-## 6. COMANDOS DE GESTIÓN DEL PROYECTO
-
-### Iniciar Servidor
-```bash
-cd server
-python src/main.py
-# o
-./scripts/start_server.sh
-```
-
-### Iniciar Cliente
-```bash
+# Cliente
 cd client
-python src/main.py
-# o
-./scripts/start_client.sh
+npm install
+
+# Servidor
+cd server
+npm install
+npm run init-db  # Inicializar MongoDB
+
+# UI
+cd ui
+npm install
 ```
 
-### Ejecutar Todas las Pruebas
+### Desarrollo
 ```bash
-./scripts/run_all_tests.sh
-# o manualmente:
-pytest client/tests -v
-pytest server/tests -v
-pytest tests/integration -v
+# Terminal 1: Iniciar MongoDB
+mongod --dbpath ./data
+
+# Terminal 2: Iniciar servidor
+cd server
+npm run dev
+
+# Terminal 3: Iniciar UI
+cd ui
+npm run dev
+
+# Terminal 4: Iniciar cliente (repetir para 9 clientes)
+cd client
+npm start
 ```
 
-### Backup de Base de Datos
+### Producción
 ```bash
-cd database
-./scripts/backup_database.sh
+# Servidor
+cd server
+npm start
+
+# UI (compilar y servir)
+cd ui
+npm run build
+# Servir dist/ con nginx o similar
+
+# Clientes
+cd client
+npm start
 ```
 
-### Limpieza de Datos Antiguos
+### Testing
 ```bash
-sqlite3 database/data/storage_cluster.db < database/scripts/cleanup_old_data.sql
-```
+# Cliente
+cd client
+npm test
 
-### Generar Documentación de Código
-```bash
-# Python con Sphinx
-cd docs
-sphinx-build -b html . _build
+# Servidor
+cd server
+npm test
 
-# Java con JavaDoc
-javadoc -d docs/api -sourcepath server/src
+# UI
+cd ui
+npm run test
+
+# E2E
+cd tests/integration
+npm test
 ```
 
 ---
 
-## 7. CHECKLIST DE ENTREGA
+## CONVENCIONES DE CÓDIGO
 
-### Estructura de Carpetas
-- [ ] Todas las carpetas creadas según estructura
-- [ ] `.gitignore` configurado correctamente
-- [ ] `README.md` completo con instrucciones
+### JavaScript/Node.js
+- **Estilo**: ESLint con configuración estándar
+- **Nombres de archivos**: PascalCase para clases (`SocketClient.js`), camelCase para utilidades
+- **Nombres de variables**: camelCase (`clientId`, `lastSeenAt`)
+- **Nombres de funciones**: camelCase (`calculateMetrics`, `sendMessage`)
+- **Constantes**: UPPER_SNAKE_CASE (`MAX_CLIENTS`, `TIMEOUT_SECONDS`)
 
-### Código Fuente
-- [ ] Cliente implementado y funcional
-- [ ] Servidor implementado y funcional
-- [ ] Código comentado y documentado
-- [ ] Sin código muerto o debug prints
+### React
+- **Componentes**: PascalCase (`Dashboard.jsx`, `ClientCard.jsx`)
+- **Hooks personalizados**: camelCase con prefijo `use` (`useClients.js`)
+- **Props**: camelCase
+- **Eventos**: camelCase con prefijo `on` (`onClick`, `onMetricsUpdate`)
 
-### Base de Datos
-- [ ] Script `init_database.sql` probado
-- [ ] Migraciones documentadas
-- [ ] Scripts de backup/restore funcionales
+### MongoDB
+- **Nombres de colecciones**: camelCase (`clients`, `globalMetrics`)
+- **Nombres de campos**: snake_case (`client_id`, `recorded_at`)
+- **IDs**: ObjectId generado automáticamente o strings como `CLIENT_001`
 
-### Interfaz Gráfica
-- [ ] Todas las vistas implementadas
-- [ ] Actualización en tiempo real funciona
-- [ ] Responsive y usable
+---
 
-### Pruebas
-- [ ] Pruebas unitarias del cliente
-- [ ] Pruebas unitarias del servidor
-- [ ] Pruebas de integración end-to-end
-- [ ] Pruebas de carga con 9 clientes
-- [ ] Coverage ≥ 80%
+## VARIABLES DE ENTORNO
+
+### client/.env
+```env
+NODE_ENV=development
+CLIENT_ID=CLIENT_001
+SERVER_HOST=localhost
+SERVER_PORT=5000
+LOG_LEVEL=info
+```
+
+### server/.env
+```env
+NODE_ENV=development
+TCP_PORT=5000
+API_PORT=3000
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=storage_cluster
+LOG_LEVEL=info
+```
+
+### ui/.env
+```env
+VITE_API_URL=http://localhost:3000
+VITE_WS_URL=http://localhost:3000
+VITE_REFRESH_INTERVAL=5000
+```
+
+---
+
+## DESPLIEGUE
+
+### Docker Compose (Opcional)
+```yaml
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+  
+  server:
+    build: ./server
+    ports:
+      - "5000:5000"  # TCP
+      - "3000:3000"  # API REST
+    depends_on:
+      - mongodb
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+  
+  ui:
+    build: ./ui
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+
+volumes:
+  mongo-data:
+```
+
+---
+
+## CHECKLIST DE ENTREGA
+
+### Código
+- [ ] Cliente Node.js funcional (conexión TCP, métricas, mensajería)
+- [ ] Servidor Node.js funcional (9 clientes, métricas globales, inactividad)
+- [ ] API REST completa con todos los endpoints
+- [ ] Dashboard React con todas las vistas
+- [ ] Base de datos MongoDB con 5 colecciones
+- [ ] Scripts de inicialización y backup
 
 ### Documentación
-- [ ] Documento de arquitectura completo
-- [ ] Manual de instalación probado
-- [ ] Manual de usuario
-- [ ] API documentada
-- [ ] Diagramas incluidos
-- [ ] Presentación para defensa preparada
+- [ ] README.md con instrucciones de instalación
+- [ ] Documentación de arquitectura
+- [ ] Documentación de API
+- [ ] Comentarios en código (JSDoc)
 
-### Configuración
-- [ ] Archivos de ejemplo incluidos
-- [ ] Configuración parametrizable
-- [ ] Instrucciones de configuración claras
+### Pruebas
+- [ ] Tests unitarios (cliente, servidor, DAOs)
+- [ ] Tests de integración
+- [ ] Test E2E de flujo completo
+- [ ] Test de carga (9 clientes concurrentes)
 
-### Despliegue
-- [ ] Scripts de despliegue probados
-- [ ] Instrucciones de instalación en README
-- [ ] Dependencias listadas correctamente
-
----
-
-## 8. TAMAÑOS ESTIMADOS
-
-```
-Estimación de tamaño del proyecto completo:
-
-Código fuente:
-- Cliente:      ~3,000 líneas   (~15 archivos)
-- Servidor:     ~5,000 líneas   (~30 archivos)
-- UI:           ~2,000 líneas   (~10 archivos)
-- Tests:        ~2,000 líneas   (~20 archivos)
-Total código:   ~12,000 líneas
-
-Base de datos:
-- Scripts SQL:  ~1,000 líneas
-- Datos (30d):  ~100 MB
-
-Documentación:
-- Markdown:     ~10,000 palabras
-- Diagramas:    ~10 archivos PNG
-- Presentación: ~20 slides
-
-Total proyecto (sin logs ni backups): ~50 MB
-```
+### Funcionalidades
+- [ ] 9 clientes enviando métricas cada 30s
+- [ ] Detección de nodos inactivos
+- [ ] Cálculo de métricas globales
+- [ ] Cálculo de growth rate (MB/h)
+- [ ] Cálculo de availability (≥99.9%)
+- [ ] Mensajería bidireccional con ACK
+- [ ] Dashboard con actualización en tiempo real
+- [ ] Almacenamiento en MongoDB
 
 ---
 
-## 9. RECOMENDACIONES FINALES
-
-### ✅ HACER:
-- Mantener estructura clara y organizada
-- Separar responsabilidades por carpetas
-- Usar paths relativos para portabilidad
-- Versionar todo con Git
-- Documentar decisiones importantes en commits
-
-### ❌ NO HACER:
-- Mezclar código de cliente y servidor
-- Commitear archivos de configuración con IPs reales
-- Commitear logs o bases de datos
-- Hardcodear paths absolutos
-- Dejar código comentado o temporal
-
----
-
-**Documento generado:** Marzo 2, 2026  
-**Versión:** 1.0  
+**Documento actualizado:** Marzo 2, 2026  
+**Versión:** 2.0 (Node.js + React + MongoDB)  
 **Estado:** COMPLETO

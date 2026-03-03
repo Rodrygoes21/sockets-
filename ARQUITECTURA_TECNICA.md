@@ -26,12 +26,12 @@
 │         │                                         │             │
 │  ┌──────▼──────┐                          ┌──────▼──────┐      │
 │  │  DATABASE   │                          │  REST API   │      │
-│  │   SQLite    │                          │             │      │
+│  │   MongoDB   │                          │  (Express)  │      │
 │  │             │                          └──────┬──────┘      │
 │  │ ┌─────────┐ │                                 │             │
 │  │ │clients  │ │                          ┌──────▼──────┐      │
 │  │ │metrics  │ │                          │ INTERFAZ    │      │
-│  │ │messages │ │                          │  GRÁFICA    │      │
+│  │ │messages │ │                          │   REACT     │      │
 │  │ │events   │ │                          │             │      │
 │  │ └─────────┘ │                          │  Dashboard  │      │
 │  └─────────────┘                          └─────────────┘      │
@@ -240,45 +240,60 @@ SERVIDOR PRINCIPAL (Main Thread)
 
 **Estructuras Compartidas Críticas:**
 
-```python
-class ConnectionManager:
-    def __init__(self):
-        self._clients = {}  # Dict de clientes activos
-        self._lock = threading.RLock()  # Reentrant lock
-        self._max_clients = 9
+```javascript
+// ConnectionManager.js - Gestión de clientes conectados
+class ConnectionManager {
+  constructor() {
+    this._clients = new Map();  // Map de clientes activos
+    this._maxClients = 9;
+  }
+  
+  addClient(clientId, socket, address) {
+    if (this._clients.size >= this._maxClients) {
+      throw new Error('MaxClientsReached');
+    }
+    this._clients.set(clientId, {
+      socket,
+      address,
+      lastSeen: new Date(),
+      status: 'UP'
+    });
+  }
+  
+  updateLastSeen(clientId) {
+    const client = this._clients.get(clientId);
+    if (client) {
+      client.lastSeen = new Date();
+    }
+  }
+  
+  getInactiveClients(timeoutSeconds) {
+    const now = new Date();
+    const inactive = [];
     
-    def add_client(self, client_id, socket, address):
-        with self._lock:
-            if len(self._clients) >= self._max_clients:
-                raise MaxClientsReachedError()
-            self._clients[client_id] = {
-                'socket': socket,
-                'address': address,
-                'last_seen': datetime.now(),
-                'status': 'UP'
-            }
-    
-    def update_last_seen(self, client_id):
-        with self._lock:
-            if client_id in self._clients:
-                self._clients[client_id]['last_seen'] = datetime.now()
-    
-    def get_inactive_clients(self, timeout_seconds):
-        with self._lock:
-            now = datetime.now()
-            inactive = []
-            for cid, info in self._clients.items():
-                elapsed = (now - info['last_seen']).total_seconds()
-                if elapsed > timeout_seconds:
-                    inactive.append(cid)
-            return inactive
+    for (const [clientId, info] of this._clients.entries()) {
+      const elapsed = (now - info.lastSeen) / 1000;
+      if (elapsed > timeoutSeconds) {
+        inactive.push(clientId);
+      }
+    }
+    return inactive;
+  }
+  
+  getClient(clientId) {
+    return this._clients.get(clientId);
+  }
+}
+
+module.exports = ConnectionManager;
 ```
 
-**Patrones de Sincronización:**
-1. **Locks (threading.RLock)**: Para estructuras compartidas como ConnectionManager
-2. **Queues (queue.Queue)**: Para comunicación entre threads (thread-safe por diseño)
-3. **Thread-local storage**: Para datos específicos de cada cliente
-4. **Database transactions**: Aislamiento SERIALIZABLE para operaciones críticas
+**Patrones de Concurrencia en Node.js:**
+1. **Event Loop**: Manejo asíncrono nativo (sin threads explícitos)
+2. **async/await**: Para operaciones I/O (base de datos, sockets)
+3. **EventEmitter**: Para comunicación entre módulos
+4. **Promises**: Para operaciones asíncronas
+5. **MongoDB transactions**: Aislamiento para operaciones críticas
 
 ---
 
@@ -326,42 +341,65 @@ CLIENTE (Main Thread)
 
 ### 4.1 Algoritmo de Detección
 
-```python
-class InactivityMonitor:
-    def __init__(self, connection_manager, db_manager, config):
-        self.conn_mgr = connection_manager
-        self.db = db_manager
-        self.timeout = config.inactivity_timeout_seconds
-        self.check_interval = 15  # segundos
+```javascript
+// InactivityMonitor.js - Monitoreo de clientes inactivos
+class InactivityMonitor {
+  constructor(connectionManager, dbManager, config) {
+    this.connMgr = connectionManager;
+    this.db = dbManager;
+    this.timeout = config.inactivityTimeoutSeconds;
+    this.checkInterval = 15000; // 15 segundos en milisegundos
+    this.intervalId = null;
+  }
+  
+  startMonitoring() {
+    this.intervalId = setInterval(() => {
+      this.checkInactiveClients();
+    }, this.checkInterval);
+  }
+  
+  stopMonitoring() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
+  
+  async checkInactiveClients() {
+    const inactive = this.connMgr.getInactiveClients(this.timeout);
     
-    def run_monitoring_loop(self):
-        while self.running:
-            time.sleep(self.check_interval)
-            self.check_inactive_clients()
-    
-    def check_inactive_clients(self):
-        inactive = self.conn_mgr.get_inactive_clients(self.timeout)
+    for (const clientId of inactive) {
+      const currentStatus = await this.db.getClientStatus(clientId);
+      
+      if (currentStatus === 'UP') {
+        // Cliente pasó de UP a DOWN
+        await this.db.updateClientStatus(clientId, 'DOWN');
+        await this.db.logAvailabilityEvent({
+          client_id: clientId,
+          event_type: 'DOWN',
+          timestamp: new Date()
+        });
         
-        for client_id in inactive:
-            current_status = self.db.get_client_status(client_id)
-            
-            if current_status == 'UP':
-                # Cliente pasó de UP a DOWN
-                self.db.update_client_status(client_id, 'DOWN')
-                self.db.log_availability_event(
-                    client_id=client_id,
-                    event_type='DOWN',
-                    timestamp=datetime.now()
-                )
-                logger.warning(f"Cliente {client_id} marcado como DOWN (no reporta)")
-                self.trigger_ui_alert(client_id, "Cliente no reporta")
+        console.warn(`Cliente ${clientId} marcado como DOWN (no reporta)`);
+        this.triggerUIAlert(clientId, "Cliente no reporta");
+      }
+    }
+  }
+  
+  triggerUIAlert(clientId, message) {
+    // Emitir evento para WebSocket/Socket.io hacia UI
+    this.socketIo.emit('alert', { clientId, message, type: 'warning' });
+  }
+}
+
+module.exports = InactivityMonitor;
 ```
 
 **Parámetros Configurables:**
-- `inactivity_timeout_seconds`: Tiempo sin reporte antes de marcar como DOWN
-  - **Recomendado**: `report_interval * 3 + 15` segundos
-  - Ejemplo: Si report_interval = 30s → timeout = 3*30 + 15 = 105 segundos
-- `check_interval`: Frecuencia de verificación (15 segundos)
+- `inactivityTimeoutSeconds`: Tiempo sin reporte antes de marcar como DOWN
+  - **Recomendado**: `reportInterval * 3 + 15` segundos
+  - Ejemplo: Si reportInterval = 30s → timeout = 3*30 + 15 = 105 segundos
+- `checkInterval`: Frecuencia de verificación (15000 ms = 15 segundos)
 
 ---
 
@@ -413,55 +451,67 @@ class InactivityMonitor:
 
 ### 5.1 Agregación de Capacidades
 
-```python
-class MetricsAggregator:
-    def calculate_global_metrics(self):
-        # Solo considerar clientes UP
-        active_clients = self.db.get_clients_by_status('UP')
-        
-        total_capacity_global = 0
-        used_capacity_global = 0
-        free_capacity_global = 0
-        
-        for client in active_clients:
-            # Obtener última métrica de cada cliente
-            latest_metric = self.db.get_latest_metric(client.client_id)
-            
-            total_capacity_global += latest_metric.total_capacity
-            used_capacity_global += latest_metric.used_capacity
-            free_capacity_global += latest_metric.free_capacity
-        
-        # Calcular porcentaje global
-        if total_capacity_global > 0:
-            utilization_percent_global = (
-                (used_capacity_global / total_capacity_global) * 100
-            )
-        else:
-            utilization_percent_global = 0.0
-        
-        # Contar clientes
-        clients_up = len(active_clients)
-        clients_down = self.db.count_clients_by_status('DOWN')
-        
-        # Almacenar en BD
-        self.db.insert_global_metrics({
-            'total_capacity_global': total_capacity_global,
-            'used_capacity_global': used_capacity_global,
-            'free_capacity_global': free_capacity_global,
-            'utilization_percent_global': round(utilization_percent_global, 2),
-            'clients_up': clients_up,
-            'clients_down': clients_down,
-            'calculated_at': datetime.now()
-        })
-        
-        return {
-            'total_capacity': total_capacity_global,
-            'used_capacity': used_capacity_global,
-            'free_capacity': free_capacity_global,
-            'utilization_percent': utilization_percent_global,
-            'clients_up': clients_up,
-            'clients_down': clients_down
-        }
+```javascript
+// MetricsAggregator.js - Agregación de métricas globales
+class MetricsAggregator {
+  constructor(dbManager) {
+    this.db = dbManager;
+  }
+  
+  async calculateGlobalMetrics() {
+    // Solo considerar clientes UP
+    const activeClients = await this.db.getClientsByStatus('UP');
+    
+    let totalCapacityGlobal = 0;
+    let usedCapacityGlobal = 0;
+    let freeCapacityGlobal = 0;
+    
+    for (const client of activeClients) {
+      // Obtener última métrica de cada cliente
+      const latestMetric = await this.db.getLatestMetric(client.client_id);
+      
+      if (latestMetric) {
+        totalCapacityGlobal += latestMetric.total_capacity;
+        usedCapacityGlobal += latestMetric.used_capacity;
+        freeCapacityGlobal += latestMetric.free_capacity;
+      }
+    }
+    
+    // Calcular porcentaje global
+    let utilizationPercentGlobal = 0;
+    if (totalCapacityGlobal > 0) {
+      utilizationPercentGlobal = (usedCapacityGlobal / totalCapacityGlobal) * 100;
+    }
+    
+    // Contar clientes
+    const clientsUp = activeClients.length;
+    const clientsDown = await this.db.countClientsByStatus('DOWN');
+    
+    // Almacenar en BD
+    const globalMetrics = {
+      total_capacity_global: totalCapacityGlobal,
+      used_capacity_global: usedCapacityGlobal,
+      free_capacity_global: freeCapacityGlobal,
+      utilization_percent_global: Math.round(utilizationPercentGlobal * 100) / 100,
+      clients_up: clientsUp,
+      clients_down: clientsDown,
+      calculated_at: new Date()
+    };
+    
+    await this.db.insertGlobalMetrics(globalMetrics);
+    
+    return {
+      total_capacity: totalCapacityGlobal,
+      used_capacity: usedCapacityGlobal,
+      free_capacity: freeCapacityGlobal,
+      utilization_percent: utilizationPercentGlobal,
+      clients_up: clientsUp,
+      clients_down: clientsDown
+    };
+  }
+}
+
+module.exports = MetricsAggregator;
 ```
 
 ---
@@ -469,61 +519,65 @@ class MetricsAggregator:
 ### 5.2 Cálculo de Growth Rate
 
 **Growth Rate Individual:**
-```python
-def calculate_growth_rate(client_id, time_window_hours=24):
-    """
-    Calcula la tasa de crecimiento del espacio usado en MB/hora
-    """
-    # Obtener métricas de las últimas N horas
-    metrics = db.get_metrics_in_window(
-        client_id=client_id,
-        hours=time_window_hours
-    )
-    
-    if len(metrics) < 2:
-        return None  # No hay suficientes datos
-    
-    # Primera y última métrica del período
-    first_metric = metrics[0]
-    last_metric = metrics[-1]
-    
-    # Calcular diferencia en bytes
-    used_diff_bytes = last_metric.used_capacity - first_metric.used_capacity
-    
-    # Calcular tiempo transcurrido en horas
-    time_diff_seconds = (
-        last_metric.recorded_at - first_metric.recorded_at
-    ).total_seconds()
-    time_diff_hours = time_diff_seconds / 3600
-    
-    if time_diff_hours == 0:
-        return None
-    
-    # Convertir a MB/hora
-    used_diff_mb = used_diff_bytes / (1024 ** 2)
-    growth_rate_mb_per_hour = used_diff_mb / time_diff_hours
-    
-    return round(growth_rate_mb_per_hour, 2)
+```javascript
+// growthRateCalculator.js
+async function calculateGrowthRate(clientId, timeWindowHours = 24) {
+  /**
+   * Calcula la tasa de crecimiento del espacio usado en MB/hora
+   */
+  // Obtener métricas de las últimas N horas
+  const metrics = await db.getMetricsInWindow(clientId, timeWindowHours);
+  
+  if (metrics.length < 2) {
+    return null; // No hay suficientes datos
+  }
+  
+  // Primera y última métrica del período
+  const firstMetric = metrics[0];
+  const lastMetric = metrics[metrics.length - 1];
+  
+  // Calcular diferencia en bytes
+  const usedDiffBytes = lastMetric.used_capacity - firstMetric.used_capacity;
+  
+  // Calcular tiempo transcurrido en horas
+  const timeDiffMs = new Date(lastMetric.recorded_at) - new Date(firstMetric.recorded_at);
+  const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+  
+  if (timeDiffHours === 0) {
+    return null;
+  }
+  
+  // Convertir a MB/hora
+  const usedDiffMB = usedDiffBytes / (1024 ** 2);
+  const growthRateMBPerHour = usedDiffMB / timeDiffHours;
+  
+  return Math.round(growthRateMBPerHour * 100) / 100;
+}
 ```
 
 **Growth Rate Global:**
-```python
-def calculate_global_growth_rate(time_window_hours=24):
-    """
-    Suma de growth rates de todos los clientes UP
-    """
-    active_clients = db.get_clients_by_status('UP')
-    
-    total_growth_rate = 0.0
-    clients_with_data = 0
-    
-    for client in active_clients:
-        gr = calculate_growth_rate(client.client_id, time_window_hours)
-        if gr is not None:
-            total_growth_rate += gr
-            clients_with_data += 1
-    
-    return round(total_growth_rate, 2)
+```javascript
+async function calculateGlobalGrowthRate(timeWindowHours = 24) {
+  /**
+   * Suma de growth rates de todos los clientes UP
+   */
+  const activeClients = await db.getClientsByStatus('UP');
+  
+  let totalGrowthRate = 0.0;
+  let clientsWithData = 0;
+  
+  for (const client of activeClients) {
+    const gr = await calculateGrowthRate(client.client_id, timeWindowHours);
+    if (gr !== null) {
+      totalGrowthRate += gr;
+      clientsWithData++;
+    }
+  }
+  
+  return Math.round(totalGrowthRate * 100) / 100;
+}
+
+module.exports = { calculateGrowthRate, calculateGlobalGrowthRate };
 ```
 
 **Interpretación:**
@@ -535,61 +589,69 @@ def calculate_global_growth_rate(time_window_hours=24):
 
 ### 5.3 Cálculo de Availability
 
-```python
-def calculate_availability(client_id, window_hours=24):
-    """
-    Calcula availability % en ventana de tiempo
-    availability = (uptime / (uptime + downtime)) * 100
-    """
-    # Obtener eventos de cambio de estado en la ventana
-    now = datetime.now()
-    start_time = now - timedelta(hours=window_hours)
+```javascript
+// availabilityCalculator.js
+async function calculateAvailability(clientId, windowHours = 24) {
+  /**
+   * Calcula availability % en ventana de tiempo
+   * availability = (uptime / (uptime + downtime)) * 100
+   */
+  // Obtener eventos de cambio de estado en la ventana
+  const now = new Date();
+  const startTime = new Date(now.getTime() - (windowHours * 60 * 60 * 1000));
+  
+  const events = await db.getAvailabilityEvents({
+    client_id: clientId,
+    start_time: startTime,
+    end_time: now
+  });
+  
+  // Estado inicial al principio de la ventana
+  let initialState = await db.getClientStatusAtTime(clientId, startTime);
+  
+  let uptimeSeconds = 0;
+  let downtimeSeconds = 0;
+  let currentState = initialState;
+  let previousTimestamp = startTime;
+  
+  for (const event of events) {
+    const duration = (new Date(event.event_timestamp) - previousTimestamp) / 1000;
     
-    events = db.get_availability_events(
-        client_id=client_id,
-        start_time=start_time,
-        end_time=now
-    )
-    
-    # Estado inicial al principio de la ventana
-    initial_state = db.get_client_status_at_time(client_id, start_time)
-    
-    uptime_seconds = 0
-    downtime_seconds = 0
-    current_state = initial_state
-    previous_timestamp = start_time
-    
-    for event in events:
-        duration = (event.event_timestamp - previous_timestamp).total_seconds()
-        
-        if current_state == 'UP':
-            uptime_seconds += duration
-        else:
-            downtime_seconds += duration
-        
-        current_state = event.event_type
-        previous_timestamp = event.event_timestamp
-    
-    # Última duración hasta ahora
-    final_duration = (now - previous_timestamp).total_seconds()
-    if current_state == 'UP':
-        uptime_seconds += final_duration
-    else:
-        downtime_seconds += final_duration
-    
-    # Calcular availability
-    total_time = uptime_seconds + downtime_seconds
-    if total_time > 0:
-        availability = (uptime_seconds / total_time) * 100
-    else:
-        availability = 0.0
-    
-    return {
-        'availability_percent': round(availability, 3),
-        'uptime_seconds': int(uptime_seconds),
-        'downtime_seconds': int(downtime_seconds),
-        'meets_sla': availability >= 99.9
+    if (currentState === 'UP') {
+      uptimeSeconds += duration;
+    } else {
+      downtimeSeconds += duration;
     }
+    
+    currentState = event.event_type;
+    previousTimestamp = new Date(event.event_timestamp);
+  }
+  
+  // Última duración hasta ahora
+  const finalDuration = (now - previousTimestamp) / 1000;
+  if (currentState === 'UP') {
+    uptimeSeconds += finalDuration;
+  } else {
+    downtimeSeconds += finalDuration;
+  }
+  
+  // Calcular availability
+  const totalTime = uptimeSeconds + downtimeSeconds;
+  let availability = 0.0;
+  
+  if (totalTime > 0) {
+    availability = (uptimeSeconds / totalTime) * 100;
+  }
+  
+  return {
+    availability_percent: Math.round(availability * 1000) / 1000,
+    uptime_seconds: Math.floor(uptimeSeconds),
+    downtime_seconds: Math.floor(downtimeSeconds),
+    meets_sla: availability >= 99.9
+  };
+}
+
+module.exports = { calculateAvailability };
 ```
 
 **Verificación de SLA (99.9%):**
@@ -607,55 +669,65 @@ def calculate_availability(client_id, window_hours=24):
 
 ## 6. INTERFAZ GRÁFICA - ARQUITECTURA
 
-### 6.1 Stack Tecnológico Recomendado
+### 6.1 Stack Tecnológico Utilizado
 
-**Opción 1: Web (HTML/CSS/JavaScript)**
+**Frontend: React Dashboard**
 ```
-Frontend: React / Vue.js / Vanilla JS
-Backend API: Flask (Python) / Express (Node.js)
-Real-time: Polling HTTP / WebSockets
-Charts: Chart.js / D3.js
-```
-
-**Opción 2: Desktop (Python)**
-```
-GUI Framework: Tkinter / PyQt5 / wxPython
-Charts: Matplotlib / Plotly
-Data access: Direct DB connection
+Framework: React 18+ con Vite
+Estado: Context API / Redux Toolkit
+Routing: React Router v6
+Charts: Chart.js con react-chartjs-2
+Estilos: Tailwind CSS / Material-UI
+HTTP Client: Axios
+Real-time: Socket.io-client para actualizaciones
 ```
 
-**Opción 3: Desktop (Java)**
+**Backend API: Express (Node.js)**
 ```
-GUI Framework: JavaFX / Swing
-Charts: JFreeChart
-Data access: JDBC
+Framework: Express.js 4+
+WebSockets: Socket.io para updates en tiempo real
+Base de Datos: MongoDB driver nativo
+Middleware: cors, body-parser, helmet
+Autenticación: JWT (opcional)
 ```
 
 ---
 
 ### 6.2 Comunicación UI ↔ Servidor
 
-**Arquitectura con API REST:**
+**Arquitectura con API REST + WebSockets:**
 ```
-┌─────────────────┐
-│  INTERFAZ WEB   │
-│                 │
-│  Dashboard      │
-│  Client View    │
-│  Global Metrics │
-│  Messages       │
-└────────┬────────┘
-         │ HTTP Requests
-         │ (JSON)
-         ▼
-┌─────────────────┐
-│   REST API      │
-│  (Flask/Express)│
-│                 │
-│  GET /clients   │
-│  GET /metrics   │
-│  POST /messages │
-└────────┬────────┘
+┌─────────────────────┐
+│  REACT DASHBOARD    │
+│                     │
+│  Dashboard (Home)   │
+│  Client Details     │
+│  Global Metrics     │
+│  Messaging          │
+│  Availability       │
+└────────┬────────────┘
+         │ 
+         ├─ HTTP/REST (Axios)
+         │  GET /api/clients
+         │  GET /api/metrics
+         │  POST /api/messages
+         │
+         └─ WebSocket (Socket.io)
+            • Real-time metrics updates
+            • Alert notifications
+            • Client status changes
+            
+┌─────────────────────┐
+│   EXPRESS SERVER    │
+│  (API REST Layer)   │
+│                     │
+│  Routes:            │
+│  - /api/clients     │
+│  - /api/metrics     │
+│  - /api/messages    │
+│                     │
+│  Socket.io server   │
+└────────┬────────────┘
          │ SQL Queries
          ▼
 ┌─────────────────┐
@@ -749,65 +821,103 @@ Response:
 
 ### 7.1 Performance de Base de Datos
 
-**Índices Estratégicos:**
-```sql
--- Consultas frecuentes de métricas por cliente y fecha
-CREATE INDEX idx_metrics_client_recorded 
-ON metrics(client_id, recorded_at DESC);
+**Índices Estratégicos (MongoDB):**
+```javascript
+// Crear índices en MongoDB para optimizar consultas
 
--- Búsqueda de últimas métricas
-CREATE INDEX idx_metrics_recorded_at 
-ON metrics(recorded_at DESC);
+// Consultas frecuentes de métricas por cliente y fecha
+db.metrics.createIndex({ "client_id": 1, "recorded_at": -1 });
 
--- Disponibilidad por cliente
-CREATE INDEX idx_events_client_timestamp 
-ON availability_events(client_id, event_timestamp);
+// Búsqueda de últimas métricas
+db.metrics.createIndex({ "recorded_at": -1 });
 
--- Mensajes pendientes de ACK
-CREATE INDEX idx_messages_status_sent 
-ON sent_messages(status, sent_at);
+// Disponibilidad por cliente
+db.availabilityEvents.createIndex({ "client_id": 1, "event_timestamp": 1 });
+
+// Mensajes pendientes de ACK
+db.sentMessages.createIndex({ "status": 1, "sent_at": -1 });
+
+// Índice para estado de clientes
+db.clients.createIndex({ "status": 1 });
 ```
 
-**Consultas Optimizadas:**
-```sql
--- Obtener última métrica de cada cliente (eficiente)
-SELECT m1.*
-FROM metrics m1
-INNER JOIN (
-    SELECT client_id, MAX(recorded_at) as max_time
-    FROM metrics
-    GROUP BY client_id
-) m2 ON m1.client_id = m2.client_id 
-    AND m1.recorded_at = m2.max_time;
-
--- Métricas globales (precalculadas)
-SELECT * FROM global_metrics
-ORDER BY calculated_at DESC
-LIMIT 1;
+**Consultas Optimizadas (MongoDB Aggregation):**
+```javascript
+// Obtener última métrica de cada cliente (eficiente)
+const latestMetrics = await db.collection('metrics').aggregate([
+  { $sort: { recorded_at: -1 } },
+  { $group: {
+      _id: "$client_id",
+      latestMetric: { $first: "$$ROOT" }
+    }
+  },
+  { $replaceRoot: { newRoot: "$latestMetric" } }
+]).toArray();
+// Métricas globales (precalculadas) - obtener la más reciente
+const latestGlobalMetrics = await db.collection('globalMetrics')
+  .find()
+  .sort({ calculated_at: -1 })
+  .limit(1)
+  .toArray();
+  
+// Clientes activos con última métrica
+const activeClientsWithMetrics = await db.collection('clients').aggregate([
+  { $match: { status: 'UP' } },
+  { $lookup: {
+      from: 'metrics',
+      let: { clientId: '$client_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$client_id', '$$clientId'] } } },
+        { $sort: { recorded_at: -1 } },
+        { $limit: 1 }
+      ],
+      as: 'latestMetric'
+    }
+  },
+  { $unwind: { path: '$latestMetric', preserveNullAndEmptyArrays: true } }
+]).toArray();
 ```
 
 ---
 
 ### 7.2 Estrategia de Caché (Opcional)
 
-```python
-class MetricsCache:
-    def __init__(self, ttl_seconds=5):
-        self.cache = {}
-        self.ttl = timedelta(seconds=ttl_seconds)
-        self.lock = threading.Lock()
+```javascript
+// MetricsCache.js - Cache simple con TTL
+class MetricsCache {
+  constructor(ttlSeconds = 5) {
+    this.cache = new Map();
+    this.ttl = ttlSeconds * 1000; // Convertir a milisegundos
+  }
+  
+  async getGlobalMetrics(db) {
+    const cacheKey = 'global';
     
-    def get_global_metrics(self):
-        with self.lock:
-            if 'global' in self.cache:
-                cached_at, data = self.cache['global']
-                if datetime.now() - cached_at < self.ttl:
-                    return data
-            
-            # Cache miss: consultar BD
-            data = db.get_latest_global_metrics()
-            self.cache['global'] = (datetime.now(), data)
-            return data
+    if (this.cache.has(cacheKey)) {
+      const { cachedAt, data } = this.cache.get(cacheKey);
+      const now = Date.now();
+      
+      if (now - cachedAt < this.ttl) {
+        return data; // Cache hit
+      }
+    }
+    
+    // Cache miss: consultar MongoDB
+    const data = await db.getLatestGlobalMetrics();
+    this.cache.set(cacheKey, {
+      cachedAt: Date.now(),
+      data
+    });
+    
+    return data;
+  }
+  
+  clearCache() {
+    this.cache.clear();
+  }
+}
+
+module.exports = MetricsCache;
 ```
 
 ---
@@ -816,14 +926,16 @@ class MetricsCache:
 
 | Aspecto | Decisión | Justificación |
 |---------|----------|---------------|
-| **Protocolo** | TCP/IP | Confiabilidad garantizada, orden de mensajes |
+| **Protocolo** | TCP/IP (módulo net) | Confiabilidad garantizada, orden de mensajes |
 | **Formato de datos** | JSON | Legibilidad, simplicidad, amplio soporte |
-| **Base de datos** | SQLite | Simplicidad para 9 clientes, sin servidor adicional |
-| **Concurrencia** | Multi-threading | Fácil de implementar, apropiado para I/O-bound |
+| **Base de datos** | MongoDB | Flexible schema, escala horizontal, JSON nativo |
+| **Backend** | Node.js | Event Loop efíciente, ecosistema npm, JavaScript full-stack |
+| **Frontend** | React | Componentización, estado reactivo, ecosistema robusto |
+| **Concurrencia** | Event Loop (Node.js) | Non-blocking I/O, apropiado para muchas conexiones |
 | **Detección inactividad** | Timeout configurable | Balance entre falsos positivos y detección rápida |
 | **Growth Rate** | MB/hora | Métrica intuitiva para gestores de sistemas |
 | **Availability** | Ventana de 24h | Alineado con SLAs estándar de la industria |
-| **UI Updates** | Polling 5s | Simple de implementar, suficiente para 9 clientes |
+| **UI Updates** | WebSocket (Socket.io) | Actualizaciones en tiempo real sin polling |
 
 ---
 

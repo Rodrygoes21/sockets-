@@ -8,6 +8,20 @@
 
 ---
 
+## � IMPORTANTE: CAMBIO DE STACK TECNOLÓGICO
+
+> **⚠️ AVISO:** Este proyecto ha sido rediseñado con stack JavaScript moderno.
+> 
+> **Stack Actual:**
+> - **Backend:** Node.js (clientes y servidor)
+> - **Frontend:** React 18 + Vite
+> - **Base de Datos:** MongoDB 6.0+
+> - **Protocolo:** TCP/IP (módulo `net`)
+>
+> 📖 **Lee primero:** [CAMBIO_DE_STACK.md](CAMBIO_DE_STACK.md) para entender las diferencias y mapeo de tecnologías.
+
+---
+
 ## 📋 DESCRIPCIÓN DEL PROYECTO
 
 Sistema distribuido de monitoreo de almacenamiento que implementa:
@@ -15,17 +29,24 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 - **9 Nodos Clientes** (Servidores Regionales) que reportan métricas de disco
 - **1 Nodo Servidor Central** que centraliza, procesa y agrega información
 - **Comunicación bidireccional** mediante Sockets TCP/IP
-- **Persistencia** en base de datos SQLite
-- **Interfaz gráfica** para visualización en tiempo real
+- **Persistencia** en base de datos MongoDB
+- **Interfaz gráfica React** para visualización en tiempo real
 - **Monitoreo de disponibilidad** con SLA ≥ 99.9%
 
 ---
 
 ## 📚 DOCUMENTACIÓN TÉCNICA COMPLETA
 
+### 🚀 Inicio Rápido
+
+1. **[CAMBIO_DE_STACK.md](CAMBIO_DE_STACK.md)** 🔥 **LEE ESTO PRIMERO**
+   - Explicación del cambio de stack tecnológico
+   - Mapeo de tecnologías Python → Node.js
+   - Guía de migración y recursos de aprendizaje
+
 ### 📖 Documentos Principales
 
-1. **[PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md)** ⭐ **INICIO AQUÍ**
+2. **[PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md)** ⭐ **PLAN GENERAL**
    - Lista completa de tareas divididas por componente
    - Descripción técnica de cada tarea
    - Criterios de aceptación y dependencias
@@ -76,10 +97,11 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 - ✅ Interfaz gráfica con dashboard en tiempo real
 
 ### No Funcionales
-- ✅ Protocolo: TCP/IP con sockets
+- ✅ Protocolo: TCP/IP con sockets (módulo net de Node.js)
 - ✅ Formato de mensajes: JSON
-- ✅ Concurrencia: Manejo de 9 clientes simultáneos
-- ✅ Base de datos: SQLite/MySQL/PostgreSQL
+- ✅ Concurrencia: Event Loop de Node.js para 9 clientes simultáneos
+- ✅ Base de datos: MongoDB (almacenamiento de métricas y eventos)
+- ✅ Frontend: React Dashboard con actualización en tiempo real
 - ✅ Operación: LAN (Red de Área Local)
 - ✅ Availability: ≥ 99.9%
 - ✅ Solo primer disco detectado por cliente
@@ -203,9 +225,9 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 
 ---
 
-## 🗄️ ESQUEMA DE BASE DE DATOS
+## 🗄️ ESQUEMA DE BASE DE DATOS (MongoDB)
 
-### Tablas Principales
+### Colecciones Principales
 
 1. **clients**: Información de los 9 nodos clientes
    - Campos: client_id, ip_address, status, last_seen_at, uptime, downtime
@@ -213,16 +235,16 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 2. **metrics**: Métricas históricas de disco por cliente
    - Campos: client_id, capacities, utilization_percent, growth_rate, recorded_at
 
-3. **global_metrics**: Métricas agregadas del cluster
+3. **globalMetrics**: Métricas agregadas del cluster
    - Campos: total/used/free capacities global, clients_up/down, calculated_at
 
-4. **sent_messages**: Mensajes enviados con estado de ACK
+4. **sentMessages**: Mensajes enviados con estado de ACK
    - Campos: message_id, client_id, content, status, sent_at, ack_received_at
 
-5. **availability_events**: Historial de cambios de estado UP/DOWN
+5. **availabilityEvents**: Historial de cambios de estado UP/DOWN
    - Campos: client_id, event_type, event_timestamp, duration_seconds
 
-**Ver [DATABASE_DESIGN.md](DATABASE_DESIGN.md) para esquema completo**
+**Ver [DATABASE_DESIGN.md](DATABASE_DESIGN.md) para esquemas MongoDB completos**
 
 ---
 
@@ -274,28 +296,30 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 
 ---
 
-## 💻 TECNOLOGÍAS SUGERIDAS
+## 💻 STACK TECNOLÓGICO
 
-### Lenguajes
-- **Python** (recomendado): Fácil, librerías robustas
-- **Java**: Robusto, buen soporte de concurrencia
-- **C#**: Excelente para Windows, WPF para UI
+### Backend (Node.js)
+- **Runtime**: Node.js v18+ (LTS)
+- **Sockets TCP**: Módulo `net` nativo de Node.js
+- **Base de Datos**: MongoDB con driver oficial `mongodb`
+- **Métricas del Sistema**: `systeminformation` para info de discos
+- **Validación**: `joi` para validación de mensajes JSON
+- **Concurrencia**: Event Loop de Node.js (async/await)
 
-### Librerías Clave
+### Frontend (React)
+- **Framework**: React v18+ con Vite
+- **Gestión de Estado**: Context API / Redux Toolkit
+- **Gráficos**: Chart.js con react-chartjs-2
+- **Estilos**: Tailwind CSS o Material-UI
+- **HTTP Client**: Axios para conexión con API REST
+- **WebSockets**: Socket.io-client para actualizaciones en tiempo real
 
-**Python:**
-- `socket`: TCP/IP nativo
-- `psutil`: Métricas de disco multiplataforma
-- `sqlite3`: Base de datos
-- `threading`: Concurrencia
-- `flask`: API REST para UI
-- `tkinter` / Web (HTML/CSS/JS): Interfaz gráfica
-
-**Java:**
-- `java.net.Socket`: TCP/IP
-- JNA/OSHI: Métricas de sistema
-- JDBC: Base de datos
-- JavaFX/Swing: UI
+### Base de Datos (MongoDB)
+- **Versión**: MongoDB 6.0+
+- **Driver**: mongodb para Node.js
+- **Colecciones**: clients, metrics, globalMetrics, sentMessages, availabilityEvents
+- **Indexación**: Índices en client_id, timestamps
+- **Agregaciones**: Pipeline de agregación para métricas globales
 
 ---
 
@@ -303,10 +327,21 @@ Sistema distribuido de monitoreo de almacenamiento que implementa:
 
 ```
 storage-cluster/
-├── client/              # Código del nodo cliente
-├── server/              # Código del servidor central
-├── database/            # Scripts SQL y datos
-├── ui/                  # Interfaz gráfica
+├── client/              # Nodo cliente (Node.js)
+│   ├── src/
+│   ├── config/
+│   ├── logs/
+│   └── package.json
+├── server/              # Servidor central (Node.js)
+│   ├── src/
+│   ├── config/
+│   ├── logs/
+│   └── package.json
+├── ui/                  # Dashboard React
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── database/            # Scripts MongoDB e inicialización
 ├── docs/                # Documentación técnica
 ├── tests/               # Pruebas end-to-end
 └── scripts/             # Utilidades
