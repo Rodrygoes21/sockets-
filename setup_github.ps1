@@ -1,4 +1,4 @@
-# Script para crear Labels, Milestones e Issues (Versión Simplificada)
+# Script para crear Labels, Milestones e Issues
 $REPO = "Rodrygoes21/sockets-"
 $GH_EXE = "C:\Program Files\GitHub CLI\gh.exe"
 # Asegúrate de haber hecho gh auth login antes de ejecutar
@@ -6,7 +6,8 @@ $GH_EXE = "C:\Program Files\GitHub CLI\gh.exe"
 Write-Host ""
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host "Storage Cluster Project - Setup GitHub" -ForegroundColor Cyan
-Write-Host "Stack: Node.js (SIMPLIFICADO 1 SEMANA)" -ForegroundColor Cyan
+Write-Host "Stack: Node.js + MongoDB + React" -ForegroundColor Cyan
+Write-Host "3 personas | 1 semana | 10 tickets" -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -19,7 +20,8 @@ $labels = @(
     @{name="priority: low"; color="0e8a16"; desc="Baja prioridad"},
     @{name="component: client"; color="1d76db"; desc="Cliente Node.js"},
     @{name="component: server"; color="5319e7"; desc="Servidor Node.js"},
-    @{name="component: ui"; color="c5def5"; desc="UI HTML/JS"},
+    @{name="component: ui"; color="c5def5"; desc="UI React"},
+    @{name="component: database"; color="006b75"; desc="MongoDB"},
     @{name="sprint-1"; color="bfd4f2"; desc="Sprint 1"},
     @{name="sprint-2"; color="d4c5f9"; desc="Sprint 2"}
 )
@@ -56,14 +58,14 @@ foreach ($ms in $milestones) {
 
 # PASO 3: Crear Issues desde CSV
 Write-Host ""
-Write-Host "PASO 3: Creando 12 Issues..." -ForegroundColor Magenta
+Write-Host "PASO 3: Creando 10 Issues..." -ForegroundColor Magenta
 
 $tickets = Import-Csv -Path ".\tickets_import.csv"
 $count = 0
 
 foreach ($ticket in $tickets) {
     $num = $count + 1
-    Write-Host "  - [$num/12] $($ticket.Title.Substring(0, [Math]::Min(40, $ticket.Title.Length)))..." -NoNewline
+    Write-Host "  - [$num/10] $($ticket.Title.Substring(0, [Math]::Min(40, $ticket.Title.Length)))..." -NoNewline
     
     $null = & $GH_EXE issue create --repo $REPO --title $ticket.Title --body $ticket.Description --label $ticket.Labels 2>&1
         
