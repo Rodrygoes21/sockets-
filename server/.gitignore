@@ -8,6 +8,10 @@ logs/
 # Variables de entorno
 .env
 
+# Base de datos
+data/
+*.db
+
 # Sistema operativo
 .DS_Store
 Thumbs.db
