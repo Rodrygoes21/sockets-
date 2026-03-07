@@ -1,0 +1,27 @@
+{
+  "name": "storage-cluster-server",
+  "version": "1.0.0",
+  "description": "Servidor TCP para Storage Cluster - Gestión de Clientes y Métricas",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "echo \"Tests pendientes\" && exit 0"
+  },
+  "keywords": [
+    "storage",
+    "cluster",
+    "tcp",
+    "server",
+    "monitoring",
+    "metrics"
+  ],
+  "author": "Equipo Storage Cluster",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
