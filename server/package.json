@@ -1,0 +1,32 @@
+{
+  "name": "storage-cluster-server",
+  "version": "1.0.0",
+  "description": "Servidor TCP para Storage Cluster con persistencia MongoDB",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "init-db": "node database/init-db.js",
+    "test": "echo \"Tests pendientes\" && exit 0"
+  },
+  "keywords": [
+    "storage",
+    "cluster",
+    "tcp",
+    "server",
+    "monitoring",
+    "metrics",
+    "mongodb"
+  ],
+  "author": "Equipo Storage Cluster",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "mongodb": "^6.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
