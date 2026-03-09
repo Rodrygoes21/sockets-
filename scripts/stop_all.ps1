@@ -24,17 +24,17 @@ if (Test-Path $pidsFile) {
     foreach ($line in $pids) {
         $parts = $line -split ","
         $name = $parts[0]
-        $pid = $parts[1]
+        $processId = $parts[1]
         
-        $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         
         if ($null -ne $process) {
-            Write-Host "🛑 Deteniendo $name (PID: $pid)..." -ForegroundColor Yellow
-            Stop-Process -Id $pid -Force
+            Write-Host "🛑 Deteniendo $name (PID: $processId)..." -ForegroundColor Yellow
+            Stop-Process -Id $processId -Force
             Write-Host "   ✅ Proceso detenido" -ForegroundColor Green
             $stoppedCount++
         } else {
-            Write-Host "⚠️  $name (PID: $pid) no encontrado" -ForegroundColor DarkGray
+            Write-Host "⚠️  $name (PID: $processId) no encontrado" -ForegroundColor DarkGray
             $notFoundCount++
         }
     }
@@ -48,46 +48,56 @@ if (Test-Path $pidsFile) {
     Write-Host ""
 }
 
-# Buscar y matar procesos adicionales por nombre
+# Buscar y matar procesos adicionales por nombre usando WMI
 Write-Host ""
 Write-Host "🔍 Buscando procesos adicionales..." -ForegroundColor Cyan
 
-$nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
+# Obtener procesos Node.js con línea de comandos
+$nodeProcesses = Get-WmiObject Win32_Process -Filter "name = 'node.exe'" -ErrorAction SilentlyContinue
 
-foreach ($process in $nodeProcesses) {
-    # Intentar identificar el tipo de proceso
-    $commandLine = $process.CommandLine
-    
-    $shouldKill = $false
-    $processType = "Node.js"
-    
-    if ($commandLine -like "*api.js*") {
-        $processType = "API REST"
-        $shouldKill = $true
-    } elseif ($commandLine -like "*server*index.js*") {
-        $processType = "TCP Server"
-        $shouldKill = $true
-    } elseif ($commandLine -like "*client*index.js*") {
-        $processType = "Cliente TCP"
-        $shouldKill = $true
+if ($nodeProcesses) {
+    foreach ($process in $nodeProcesses) {
+        $commandLine = $process.CommandLine
+        $shouldKill = $false
+        $processType = "Node.js"
+        
+        if ($commandLine -like "*api.js*") {
+            $processType = "API REST"
+            $shouldKill = $true
+        } elseif ($commandLine -like "*server*index.js*") {
+            $processType = "TCP Server"
+            $shouldKill = $true
+        } elseif ($commandLine -like "*client*index.js*") {
+            $processType = "Cliente TCP"
+            $shouldKill = $true
+        }
+        
+        if ($shouldKill) {
+            Write-Host "🛑 Deteniendo $processType (PID: $($process.ProcessId))..." -ForegroundColor Yellow
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Host "   ✅ Proceso detenido" -ForegroundColor Green
+            $stoppedCount++
+        }
     }
-    
-    if ($shouldKill) {
-        Write-Host "🛑 Deteniendo $processType (PID: $($process.Id))..." -ForegroundColor Yellow
+} else {
+    Write-Host "ℹ️  No se encontraron procesos Node.js" -ForegroundColor Gray
+}
+
+# Detener Vite (UI) - buscar por nombre de proceso
+$viteProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
+    $wmiProc = Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue
+    if ($wmiProc -and $wmiProc.CommandLine) {
+        $wmiProc.CommandLine -like "*vite*" -or $wmiProc.CommandLine -like "*npm*run*dev*"
+    }
+}
+
+if ($viteProcesses) {
+    foreach ($process in $viteProcesses) {
+        Write-Host "🛑 Deteniendo UI Vite (PID: $($process.Id))..." -ForegroundColor Yellow
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         Write-Host "   ✅ Proceso detenido" -ForegroundColor Green
         $stoppedCount++
     }
-}
-
-# Detener Vite (UI)
-$viteProcesses = Get-Process | Where-Object { $_.CommandLine -like "*vite*" -or $_.CommandLine -like "*npm*run*dev*" }
-
-foreach ($process in $viteProcesses) {
-    Write-Host "🛑 Deteniendo UI Vite (PID: $($process.Id))..." -ForegroundColor Yellow
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    Write-Host "   ✅ Proceso detenido" -ForegroundColor Green
-    $stoppedCount++
 }
 
 Write-Host ""

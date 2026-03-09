@@ -17,23 +17,39 @@ if (-not (Test-Path $pidsFile)) {
     Write-Host "   Buscando procesos node.exe manualmente..." -ForegroundColor Yellow
     Write-Host ""
     
-    # Buscar todos los procesos node.exe que estén ejecutando el cliente
-    $clientProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -like "*client*index.js*"
+    # Obtener todos los procesos node con su línea de comandos usando WMI
+    $nodeProcesses = Get-WmiObject Win32_Process -Filter "name = 'node.exe'" -ErrorAction SilentlyContinue
+    
+    $clientProcesses = @()
+    foreach ($proc in $nodeProcesses) {
+        if ($proc.CommandLine -like "*client*index.js*") {
+            $clientProcesses += $proc
+        }
     }
     
     if ($clientProcesses.Count -eq 0) {
-        Write-Host "❌ No se encontraron clientes ejecutándose" -ForegroundColor Red
-        exit 1
+        Write-Host "⚠️  No se encontraron clientes ejecutándose" -ForegroundColor Yellow
+        Write-Host "   Deteniendo todos los procesos node.exe como alternativa..." -ForegroundColor Yellow
+        $allNodes = Get-Process -Name "node" -ErrorAction SilentlyContinue
+        if ($allNodes.Count -gt 0) {
+            foreach ($proc in $allNodes) {
+                Write-Host "🛑 Deteniendo Node.js PID $($proc.Id)..." -ForegroundColor Yellow
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                Write-Host "   ✅ Proceso detenido" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "❌ No se encontraron procesos node.exe" -ForegroundColor Red
+        }
+        exit 0
     }
     
     Write-Host "📌 Encontrados $($clientProcesses.Count) proceso(s) de clientes" -ForegroundColor Cyan
     Write-Host ""
     
     foreach ($process in $clientProcesses) {
-        Write-Host "🛑 Deteniendo PID $($process.Id)..." -ForegroundColor Yellow
-        Stop-Process -Id $process.Id -Force
-        Write-Host "   ✅ Proceso $($process.Id) detenido" -ForegroundColor Green
+        Write-Host "🛑 Deteniendo PID $($process.ProcessId)..." -ForegroundColor Yellow
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        Write-Host "   ✅ Proceso $($process.ProcessId) detenido" -ForegroundColor Green
     }
     
 } else {
@@ -47,16 +63,16 @@ if (-not (Test-Path $pidsFile)) {
     $stoppedCount = 0
     $notFoundCount = 0
     
-    foreach ($pid in $pids) {
-        $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    foreach ($processId in $pids) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         
         if ($null -ne $process) {
-            Write-Host "🛑 Deteniendo PID $pid..." -ForegroundColor Yellow
-            Stop-Process -Id $pid -Force
-            Write-Host "   ✅ Proceso $pid detenido" -ForegroundColor Green
+            Write-Host "🛑 Deteniendo PID $processId..." -ForegroundColor Yellow
+            Stop-Process -Id $processId -Force
+            Write-Host "   ✅ Proceso $processId detenido" -ForegroundColor Green
             $stoppedCount++
         } else {
-            Write-Host "⚠️  PID $pid no encontrado (ya finalizado)" -ForegroundColor DarkGray
+            Write-Host "⚠️  PID $processId no encontrado (ya finalizado)" -ForegroundColor DarkGray
             $notFoundCount++
         }
     }
