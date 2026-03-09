@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Dashboard from './Dashboard'
+import MetricsChart from './MetricsChart'
 
 function App() {
   return (
@@ -9,6 +10,7 @@ function App() {
         <p>Monitoreo en tiempo real de clientes conectados</p>
       </header>
       <main className="app-main">
+        <MetricsChart />
         <Dashboard />
       </main>
       <footer className="app-footer">
