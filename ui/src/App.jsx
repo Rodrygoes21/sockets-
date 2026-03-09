@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import Dashboard from './Dashboard'
 import MetricsChart from './MetricsChart'
+import MessageForm from './MessageForm'
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
       </header>
       <main className="app-main">
         <MetricsChart />
+        <MessageForm />
         <Dashboard />
       </main>
       <footer className="app-footer">
