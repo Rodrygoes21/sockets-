@@ -296,6 +296,123 @@ app.post('/api/message', async (req, res) => {
 });
 
 // ============================================
+// Endpoints de Métricas Globales
+// ============================================
+
+/**
+ * GET /api/metrics/global - Métricas agregadas del cluster
+ * Suma total de capacidades de todos los clientes UP/conectados
+ */
+app.get('/api/metrics/global', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({
+                error: 'Database not connected',
+                message: 'La base de datos no está disponible'
+            });
+        }
+
+        const globalMetrics = await db.getGlobalMetrics();
+
+        res.json({
+            success: true,
+            data: {
+                totalCapacityMB: globalMetrics.totalCapacity,
+                totalCapacityGB: (globalMetrics.totalCapacity / 1024).toFixed(2),
+                usedCapacityMB: globalMetrics.usedCapacity,
+                usedCapacityGB: (globalMetrics.usedCapacity / 1024).toFixed(2),
+                freeCapacityMB: globalMetrics.freeCapacity,
+                freeCapacityGB: (globalMetrics.freeCapacity / 1024).toFixed(2),
+                utilizationPercent: globalMetrics.utilizationPercent.toFixed(2),
+                avgGrowthRateMBPerHour: globalMetrics.avgGrowthRate.toFixed(2),
+                activeClientsCount: globalMetrics.clientsCount
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error en GET /api/metrics/global:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/growth-rate - Tasa de crecimiento global del cluster
+ * Calcula MB/hora de crecimiento comparando métricas actuales con hace 1 hora
+ */
+app.get('/api/metrics/growth-rate', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({
+                error: 'Database not connected',
+                message: 'La base de datos no está disponible'
+            });
+        }
+
+        const growthData = await db.getGlobalGrowthRate();
+
+        res.json({
+            success: true,
+            data: {
+                growthRateMBPerHour: growthData.growthRateMBPerHour.toFixed(2),
+                growthRateGBPerDay: ((growthData.growthRateMBPerHour * 24) / 1024).toFixed(2),
+                clientsAnalyzed: growthData.clientsAnalyzed
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error en GET /api/metrics/growth-rate:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/availability - Disponibilidad del cluster
+ * Porcentaje de tiempo que los clientes han estado UP
+ * Query params:
+ *   - hours: período en horas para calcular (default: 24)
+ */
+app.get('/api/metrics/availability', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({
+                error: 'Database not connected',
+                message: 'La base de datos no está disponible'
+            });
+        }
+
+        const hours = parseInt(req.query.hours) || 24;
+        const availabilityData = await db.getGlobalAvailability(hours);
+
+        res.json({
+            success: true,
+            data: {
+                availabilityPercent: availabilityData.availabilityPercent.toFixed(2),
+                meetsRequirement: availabilityData.availabilityPercent >= 99.9,
+                totalClients: availabilityData.totalClients,
+                averageUptimeHours: availabilityData.averageUptimeHours.toFixed(2),
+                periodAnalyzedHours: availabilityData.periodHours
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error en GET /api/metrics/availability:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
+    }
+});
+
+// ============================================
 // Manejo de errores 404
 // ============================================
 
@@ -308,6 +425,9 @@ app.use((req, res) => {
             'GET /api/clients',
             'GET /api/metrics',
             'GET /api/metrics/:clientId',
+            'GET /api/metrics/global',
+            'GET /api/metrics/growth-rate',
+            'GET /api/metrics/availability',
             'POST /api/message'
         ]
     });
@@ -335,6 +455,9 @@ async function startServer() {
             console.log(`   GET  /api/clients`);
             console.log(`   GET  /api/metrics`);
             console.log(`   GET  /api/metrics/:clientId`);
+            console.log(`   GET  /api/metrics/global`);
+            console.log(`   GET  /api/metrics/growth-rate`);
+            console.log(`   GET  /api/metrics/availability`);
             console.log(`   POST /api/message`);
             console.log(`\n🔧 CORS habilitado para todas las rutas`);
             console.log(`💾 MongoDB: ${MONGODB_DB_NAME}`);

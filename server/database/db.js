@@ -422,6 +422,225 @@ class DatabaseManager {
             throw error;
         }
     }
+
+    // ============================================
+    // Métricas Globales Agregadas
+    // ============================================
+
+    /**
+     * Calcula métricas globales del cluster (SUM de capacidades de clientes UP)
+     */
+    async getGlobalMetrics() {
+        try {
+            const metricsCollection = this.db.collection('metrics');
+            const clientsCollection = this.db.collection('clients');
+
+            // Obtener IDs de clientes conectados/UP
+            const connectedClients = await clientsCollection.find({ 
+                status: { $in: ['connected', 'UP'] }
+            }).toArray();
+
+            if (connectedClients.length === 0) {
+                return {
+                    totalCapacity: 0,
+                    usedCapacity: 0,
+                    freeCapacity: 0,
+                    utilizationPercent: 0,
+                    avgGrowthRate: 0,
+                    clientsCount: 0,
+                    timestamp: new Date()
+                };
+            }
+
+            const clientIds = connectedClients.map(c => c.clientId);
+
+            // Obtener las métricas más recientes de cada cliente conectado
+            const latestMetrics = await metricsCollection.aggregate([
+                { $match: { clientId: { $in: clientIds } } },
+                { $sort: { receivedAt: -1 } },
+                {
+                    $group: {
+                        _id: '$clientId',
+                        latestMetric: { $first: '$metrics' }
+                    }
+                }
+            ]).toArray();
+
+            // Calcular sumas
+            let totalCapacity = 0;
+            let usedCapacity = 0;
+            let freeCapacity = 0;
+            let totalGrowthRate = 0;
+
+            latestMetrics.forEach(item => {
+                const metric = item.latestMetric;
+                if (metric.total_capacity) {
+                    totalCapacity += metric.total_capacity || 0;
+                    usedCapacity += metric.used_capacity || 0;
+                    freeCapacity += metric.free_capacity || 0;
+                    totalGrowthRate += metric.growth_rate || 0;
+                }
+            });
+
+            const utilizationPercent = totalCapacity > 0 
+                ? (usedCapacity / totalCapacity) * 100 
+                : 0;
+
+            const avgGrowthRate = latestMetrics.length > 0 
+                ? totalGrowthRate / latestMetrics.length 
+                : 0;
+
+            return {
+                totalCapacity,
+                usedCapacity,
+                freeCapacity,
+                utilizationPercent,
+                avgGrowthRate,
+                clientsCount: latestMetrics.length,
+                timestamp: new Date()
+            };
+
+        } catch (error) {
+            console.error('❌ Error calculando métricas globales:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Calcula el Growth Rate global (MB/hora) del cluster
+     * Compara métricas actuales con métricas de hace 1 hora
+     */
+    async getGlobalGrowthRate() {
+        try {
+            const metricsCollection = this.db.collection('metrics');
+            const now = new Date();
+            const oneHourAgo = new Date(now - 60 * 60 * 1000);
+
+            // Obtener métricas actuales
+            const currentMetrics = await metricsCollection.aggregate([
+                { $match: { receivedAt: { $gte: oneHourAgo } } },
+                { $sort: { receivedAt: -1 } },
+                {
+                    $group: {
+                        _id: '$clientId',
+                        latestUsed: { $first: '$metrics.used_capacity' },
+                        latestTime: { $first: '$receivedAt' }
+                    }
+                }
+            ]).toArray();
+
+            // Obtener métricas más antiguas de cada cliente
+            const oldMetrics = await metricsCollection.aggregate([
+                { $match: { receivedAt: { $lte: oneHourAgo } } },
+                { $sort: { receivedAt: -1 } },
+                {
+                    $group: {
+                        _id: '$clientId',
+                        oldestUsed: { $first: '$metrics.used_capacity' },
+                        oldestTime: { $first: '$receivedAt' }
+                    }
+                }
+            ]).toArray();
+
+            // Calcular crecimiento
+            let totalGrowth = 0;
+            let clientsWithGrowth = 0;
+
+            currentMetrics.forEach(current => {
+                const old = oldMetrics.find(o => o._id === current._id);
+                if (old && current.latestUsed && old.oldestUsed) {
+                    const timeDiff = (current.latestTime - old.oldestTime) / (1000 * 60 * 60); // horas
+                    if (timeDiff > 0) {
+                        const growth = (current.latestUsed - old.oldestUsed) / timeDiff; // MB/hora
+                        totalGrowth += growth;
+                        clientsWithGrowth++;
+                    }
+                }
+            });
+
+            const avgGrowthRate = clientsWithGrowth > 0 
+                ? totalGrowth / clientsWithGrowth 
+                : 0;
+
+            return {
+                growthRateMBPerHour: avgGrowthRate,
+                clientsAnalyzed: clientsWithGrowth,
+                timestamp: new Date()
+            };
+
+        } catch (error) {
+            console.error('❌ Error calculando growth rate global:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Calcula la disponibilidad (availability) del cluster
+     * Porcentaje de tiempo que los clientes han estado UP/conectados
+     */
+    async getGlobalAvailability(hoursBack = 24) {
+        try {
+            const clientsCollection = this.db.collection('clients');
+            const metricsCollection = this.db.collection('metrics');
+            const now = new Date();
+            const startTime = new Date(now - hoursBack * 60 * 60 * 1000);
+
+            // Obtener todos los clientes registrados
+            const allClients = await clientsCollection.find({}).toArray();
+
+            if (allClients.length === 0) {
+                return {
+                    availabilityPercent: 0,
+                    totalClients: 0,
+                    averageUptime: 0,
+                    timestamp: new Date()
+                };
+            }
+
+            // Calcular uptime de cada cliente basado en métricas recibidas
+            let totalUptimeSeconds = 0;
+            let clientsWithData = 0;
+
+            for (const client of allClients) {
+                // Contar métricas recibidas en el período
+                const metricsCount = await metricsCollection.countDocuments({
+                    clientId: client.clientId,
+                    receivedAt: { $gte: startTime }
+                });
+
+                // Asumiendo que los clientes reportan cada 30 segundos
+                // Si recibimos N métricas, el cliente estuvo activo N * 30 segundos
+                const uptimeSeconds = metricsCount * 30;
+                totalUptimeSeconds += uptimeSeconds;
+                
+                if (metricsCount > 0) {
+                    clientsWithData++;
+                }
+            }
+
+            const totalPossibleSeconds = hoursBack * 60 * 60 * allClients.length;
+            const availabilityPercent = totalPossibleSeconds > 0
+                ? (totalUptimeSeconds / totalPossibleSeconds) * 100
+                : 0;
+
+            const averageUptime = clientsWithData > 0
+                ? totalUptimeSeconds / clientsWithData
+                : 0;
+
+            return {
+                availabilityPercent,
+                totalClients: allClients.length,
+                averageUptimeSeconds: averageUptime,
+                averageUptimeHours: averageUptime / 3600,
+                periodHours: hoursBack,
+                timestamp: new Date()
+            };
+
+        } catch (error) {
+            console.error('❌ Error calculando availability:', error.message);
+            throw error;
+        }
+    }
 }
 
 module.exports = DatabaseManager;

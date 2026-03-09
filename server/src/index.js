@@ -1,24 +1,39 @@
 const net = require('net');
 const EventEmitter = require('events');
+const DatabaseManager = require('../database/db');
 
 /**
  * Servidor TCP para Storage Cluster
  * Gestiona conexiones de múltiples clientes (3-5) y procesa métricas
  */
 class StorageClusterServer extends EventEmitter {
-    constructor(port = 5000, maxClients = 5) {
+    constructor(port = 5000, maxClients = 5, databaseManager = null) {
         super();
         this.port = port;
         this.maxClients = maxClients;
-        this.clients = new Map(); // clientId -> { socket, info, metrics }
+        this.clients = new Map(); // clientId -> { socket, info, metrics, lastSeen }
         this.clientIdCounter = 1;
         this.server = null;
+        this.db = databaseManager;
+        this.inactivityMonitorInterval = null;
+        this.INACTIVITY_TIMEOUT = 105000; // 105 segundos (30s × 3 + 15s buffer)
+        this.MONITOR_CHECK_INTERVAL = 15000; // Revisar cada 15 segundos
     }
 
     /**
      * Inicia el servidor TCP
      */
-    start() {
+    async start() {
+        // Conectar a MongoDB si está disponible
+        if (this.db) {
+            try {
+                await this.db.connect();
+                console.log('✅ Servidor TCP conectado a MongoDB\n');
+            } catch (error) {
+                console.warn('⚠️  MongoDB no disponible, continuando sin persistencia');
+            }
+        }
+
         this.server = net.createServer((socket) => {
             this.handleNewConnection(socket);
         });
@@ -35,8 +50,12 @@ class StorageClusterServer extends EventEmitter {
             console.log(`📡 Puerto: ${this.port}`);
             console.log(`👥 Clientes máximos: ${this.maxClients}`);
             console.log(`⏰ Iniciado: ${new Date().toISOString()}`);
+            console.log(`🔍 Monitor de inactividad: ${this.INACTIVITY_TIMEOUT / 1000}s timeout`);
             console.log('═══════════════════════════════════════════════════\n');
             this.emit('started', { port: this.port });
+            
+            // Iniciar monitor de inactividad
+            this.startInactivityMonitor();
         });
     }
 
@@ -63,11 +82,22 @@ class StorageClusterServer extends EventEmitter {
             socket: socket,
             address: `${socket.remoteAddress}:${socket.remotePort}`,
             connectedAt: new Date(),
+            lastSeen: new Date(),
             metrics: [],
-            pendingAcks: new Map() // messageId -> pendingAck
+            pendingAcks: new Map(), // messageId -> pendingAck
+            status: 'connected'
         };
 
         this.clients.set(clientId, clientInfo);
+        
+        // Registrar cliente en MongoDB
+        if (this.db && this.db.isConnected()) {
+            this.db.registerClient({
+                clientId: clientId,
+                address: clientInfo.address,
+                connectedAt: clientInfo.connectedAt
+            }).catch(err => console.error('Error registrando cliente en DB:', err.message));
+        }
 
         console.log(`✅ Cliente conectado: ${clientId}`);
         console.log(`   📍 Dirección: ${clientInfo.address}`);
@@ -123,6 +153,10 @@ class StorageClusterServer extends EventEmitter {
                 console.error(`⚠️  Cliente no encontrado: ${clientId}`);
                 return;
             }
+
+            // Actualizar lastSeen al recibir cualquier mensaje
+            client.lastSeen = new Date();
+            client.status = 'connected';
 
             // Soportar ambos formatos: type y message_type
             const messageType = message.type || message.message_type;
@@ -203,6 +237,15 @@ class StorageClusterServer extends EventEmitter {
         // Mantener solo las últimas 100 métricas por cliente
         if (client.metrics.length > 100) {
             client.metrics.shift();
+        }
+
+        // Guardar en MongoDB
+        if (this.db && this.db.isConnected()) {
+            this.db.saveMetrics({
+                clientId: clientId,
+                metrics: metrics,
+                receivedAt: metrics.receivedAt
+            }).catch(err => console.error('Error guardando métricas en DB:', err.message));
         }
 
         console.log(`📊 Métricas de ${clientId}:`);
@@ -329,6 +372,12 @@ class StorageClusterServer extends EventEmitter {
         console.log(`   Razón: ${reason}`);
         console.log(`   👥 Clientes activos: ${this.clients.size - 1}/${this.maxClients}\n`);
 
+        // Actualizar en MongoDB
+        if (this.db && this.db.isConnected()) {
+            this.db.disconnectClient(clientId, reason)
+                .catch(err => console.error('Error actualizando cliente en DB:', err.message));
+        }
+
         // Limpiar socket
         if (client.socket && !client.socket.destroyed) {
             client.socket.destroy();
@@ -356,10 +405,95 @@ class StorageClusterServer extends EventEmitter {
     }
 
     /**
+     * Inicia el monitor de inactividad de clientes
+     * Revisa cada 15 segundos si algún cliente lleva más de 105 segundos sin reportar
+     */
+    startInactivityMonitor() {
+        console.log('🔍 Iniciando monitor de inactividad...\n');
+        
+        this.inactivityMonitorInterval = setInterval(() => {
+            this.checkInactiveClients();
+        }, this.MONITOR_CHECK_INTERVAL);
+    }
+
+    /**
+     * Detiene el monitor de inactividad
+     */
+    stopInactivityMonitor() {
+        if (this.inactivityMonitorInterval) {
+            clearInterval(this.inactivityMonitorInterval);
+            this.inactivityMonitorInterval = null;
+            console.log('⏹️  Monitor de inactividad detenido');
+        }
+    }
+
+    /**
+     * Revisa clientes inactivos y los marca como DOWN
+     */
+    checkInactiveClients() {
+        const now = new Date();
+        let inactiveCount = 0;
+
+        this.clients.forEach((client, clientId) => {
+            const timeSinceLastSeen = now - client.lastSeen;
+            
+            // Si el cliente lleva más del timeout sin reportar, marcarlo como DOWN
+            if (timeSinceLastSeen > this.INACTIVITY_TIMEOUT && client.status === 'connected') {
+                console.log(`⚠️  Cliente inactivo detectado: ${clientId}`);
+                console.log(`   Último contacto: ${client.lastSeen.toISOString()}`);
+                console.log(`   Tiempo sin reportar: ${(timeSinceLastSeen / 1000).toFixed(0)}s\n`);
+                
+                // Marcar como DOWN en memoria
+                client.status = 'DOWN';
+                inactiveCount++;
+                
+                // Actualizar en MongoDB
+                if (this.db && this.db.isConnected()) {
+                    this.db.updateClientStatus(clientId, 'DOWN')
+                        .catch(err => console.error('Error actualizando estado en DB:', err.message));
+                }
+                
+                // Emitir evento
+                this.emit('clientInactive', { clientId, timeSinceLastSeen });
+                
+                // Notificar al cliente (si está conectado)
+                try {
+                    this.sendMessage(clientId, {
+                        message_type: 'WARNING',
+                        message_id: Date.now(),
+                        message: 'Cliente marcado como inactivo por no reportar métricas',
+                        timestamp: new Date().toISOString()
+                    });
+                } catch (err) {
+                    console.error(`Error enviando notificación a ${clientId}:`, err.message);
+                }
+            }
+            
+            // Si el cliente vuelve a reportar (lastSeen actualizado), marcarlo como UP
+            if (timeSinceLastSeen <= this.INACTIVITY_TIMEOUT && client.status === 'DOWN') {
+                console.log(`✅ Cliente reactivado: ${clientId}\n`);
+                client.status = 'connected';
+                
+                if (this.db && this.db.isConnected()) {
+                    this.db.updateClientStatus(clientId, 'connected')
+                        .catch(err => console.error('Error actualizando estado en DB:', err.message));
+                }
+            }
+        });
+
+        if (inactiveCount > 0) {
+            console.log(`📊 Resumen: ${inactiveCount} cliente(s) marcado(s) como inactivo(s)\n`);
+        }
+    }
+
+    /**
      * Detiene el servidor
      */
-    stop() {
+    async stop() {
         console.log('\n🛑 Deteniendo servidor...');
+        
+        // Detener monitor de inactividad
+        this.stopInactivityMonitor();
         
         // Desconectar todos los clientes
         this.clients.forEach((client, clientId) => {
@@ -371,13 +505,20 @@ class StorageClusterServer extends EventEmitter {
             client.socket.end();
         });
 
-        // Cerrar servidor
+        // Cerrar servidor TCP
         if (this.server) {
             this.server.close(() => {
-                console.log('✅ Servidor detenido correctamente\n');
+                console.log('✅ Servidor TCP detenido correctamente');
                 this.emit('stopped');
             });
         }
+        
+        // Desconectar MongoDB
+        if (this.db && this.db.isConnected()) {
+            await this.db.disconnect();
+        }
+        
+        console.log('✅ Servidor detenido completamente\n');
     }
 }
 
@@ -388,8 +529,14 @@ class StorageClusterServer extends EventEmitter {
 if (require.main === module) {
     const PORT = process.env.PORT || 5000;
     const MAX_CLIENTS = process.env.MAX_CLIENTS || 5;
+    const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+    const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'storage_cluster';
 
-    const server = new StorageClusterServer(PORT, MAX_CLIENTS);
+    // Crear instancia de DatabaseManager
+    const db = new DatabaseManager(MONGODB_URI, MONGODB_DB_NAME);
+    
+    // Crear servidor con base de datos
+    const server = new StorageClusterServer(PORT, MAX_CLIENTS, db);
 
     // Eventos del servidor
     server.on('clientConnected', ({ clientId, address }) => {
@@ -398,6 +545,10 @@ if (require.main === module) {
 
     server.on('metricsReceived', ({ clientId, metrics }) => {
         console.log(`🔔 Evento: Métricas recibidas de ${clientId}`);
+    });
+
+    server.on('clientInactive', ({ clientId, timeSinceLastSeen }) => {
+        console.log(`🔔 Evento: Cliente ${clientId} inactivo (${(timeSinceLastSeen / 1000).toFixed(0)}s sin reportar)`);
     });
 
     server.on('clientDisconnected', ({ clientId, reason }) => {
